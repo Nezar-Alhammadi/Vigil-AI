@@ -1,0 +1,28 @@
+llm:
+  provider: "openai"       # openai | anthropic | google
+  model: "gpt-4-turbo"
+  api_key: ""              # Set via env: OPENAI_API_KEY
+  temperature: 0.2
+
+
+audit:
+  severity_level: "medium"   # low | medium | high | critical
+  report_format: "markdown"  # markdown | json
+
+
+supported_languages:
+  - "solidity"
+  - "vyper"
+
+
+# ── Explorer API Keys (optional, increases rate limits) ─────────────────────
+# You can also set these via environment variables:
+#   ETHERSCAN_API_KEY, BSCSCAN_API_KEY, POLYGONSCAN_API_KEY, etc.
+explorer_api_keys:
+  ethereum:  ""   # https://etherscan.io/myapikey
+  bsc:       ""   # https://bscscan.com/myapikey
+  polygon:   ""   # https://polygonscan.com/myapikey
+  arbitrum:  ""   # https://arbiscan.io/myapikey
+  optimism:  ""   # https://optimistic.etherscan.io/myapikey
+  base:      ""   # https://basescan.org/myapikey
+  avalanche: ""   # https://snowtrace.io/myapikey
