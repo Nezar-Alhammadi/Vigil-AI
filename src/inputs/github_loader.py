@@ -48,7 +48,7 @@ class GitHubLoader:
             # 1. نسخ المستودع
             self._clone()
 
-            # 2. تثبيت التبعيات (Foundry / Submodules)
+            # 2. تهيئة المشروع بالكامل وتثبيت التبعيات
             self._install_dependencies()
 
             # 3. تحميل الملفات باستخدام LocalLoader
@@ -101,13 +101,13 @@ class GitHubLoader:
             )
 
     def _install_dependencies(self) -> None:
-        """محاولة تثبيت المكتبات الناقصة (Submodules و Foundry)."""
+        """محاولة تهيئة المشروع بالكامل وتثبيت جميع المكتبات قبل الفحص."""
         if not self._temp_dir:
             return
 
         root = Path(self._temp_dir)
 
-        # 1. التأكد من تحديث الـ submodules يدوياً في حال فشل الـ clone التلقائي
+        # 1. تهيئة الـ Submodules الخاصة بـ Git
         subprocess.run(
             ["git", "submodule", "update", "--init", "--recursive"],
             cwd=self._temp_dir,
@@ -115,15 +115,39 @@ class GitHubLoader:
             timeout=60
         )
 
-        # 2. إذا وجد ملف foundry.toml، نحاول تشغيل forge install
+        # 2. تثبيت مكتبات Node.js إذا كان المشروع يستخدم package.json (خطوة حاسمة لـ OpenZeppelin)
+        if (root / "package.json").exists():
+            if shutil.which("yarn"):
+                subprocess.run(["yarn", "install"], cwd=self._temp_dir, capture_output=True, timeout=120)
+            elif shutil.which("npm"):
+                subprocess.run(["npm", "install", "--legacy-peer-deps"], cwd=self._temp_dir, capture_output=True, timeout=120)
+
+        # 3. تهيئة وبناء مشاريع Foundry
         if (root / "foundry.toml").exists():
             forge_bin = shutil.which("forge")
             if forge_bin:
-                # ملاحظة: قد يستغرق هذا وقتاً طويلاً حسب حجم المكتبات
+                # تثبيت مكتبات Foundry مع معامل --no-commit لمنع الأخطاء في النسخ المؤقتة
                 subprocess.run(
-                    [forge_bin, "install"],
-                    cwd=self._temp_dir,
-                    capture_output=True,
-                    text=True,
-                    timeout=300
+                    [forge_bin, "install", "--no-commit"], 
+                    cwd=self._temp_dir, 
+                    capture_output=True, 
+                    timeout=120
+                )
+                # عمل بناء (Build) صامت مسبقاً للتأكد من تحميل الـ remappings وتهيئة المشروع لـ Slither
+                subprocess.run(
+                    [forge_bin, "build"], 
+                    cwd=self._temp_dir, 
+                    capture_output=True, 
+                    timeout=120
+                )
+
+        # 4. تهيئة مشاريع Hardhat (إن وجدت)
+        if (root / "hardhat.config.js").exists() or (root / "hardhat.config.ts").exists():
+            npx_bin = shutil.which("npx")
+            if npx_bin:
+                subprocess.run(
+                    [npx_bin, "hardhat", "compile"], 
+                    cwd=self._temp_dir, 
+                    capture_output=True, 
+                    timeout=120
                 )
