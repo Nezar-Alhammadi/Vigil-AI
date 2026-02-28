@@ -11,6 +11,7 @@ It currently focuses on source loading and scan input preparation.
 
 - Python 3.10+
 - Git (needed for `--url` scans)
+- Slither (installed via `requirements.txt`)
 
 ## Run Locally
 
@@ -74,4 +75,4 @@ docker run --rm vigil-ai scan --address 0x00000000000000000000000000000000000000
 ## Notes
 
 - `src/ai_engine` and `src/auditor` are still placeholders.
-- Current output lists discovered contract files and metadata.
+- Each `scan` now runs Slither automatically after loading contracts.

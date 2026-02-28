@@ -17,6 +17,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import shlex
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path, PurePosixPath
 from typing import Optional
 
 import typer
@@ -149,6 +153,7 @@ def _run_local_scan(path: str) -> None:
         contracts = loader.load()
 
     _print_contracts_table(contracts, source_label="Local Path")
+    _run_slither(path)
 
 
 def _run_github_scan(url: str) -> None:
@@ -164,13 +169,16 @@ def _run_github_scan(url: str) -> None:
     try:
         with console.status("[bold green]Cloning repository..."):
             contracts = loader.load()
+            repo_path = loader.repo_path
     except RuntimeError as exc:
         err_console.print(f"[bold red]Error:[/bold red] {exc}")
         raise typer.Exit(code=1)
+    else:
+        _print_contracts_table(contracts, source_label="GitHub Repository")
+        if repo_path:
+            _run_slither(repo_path)
     finally:
         loader.cleanup()
-
-    _print_contracts_table(contracts, source_label="GitHub Repository")
 
 
 def _run_chain_scan(address: str, chain: str, api_key: str) -> None:
@@ -202,6 +210,7 @@ def _run_chain_scan(address: str, chain: str, api_key: str) -> None:
         raise typer.Exit(code=1)
 
     _print_contracts_table(contracts, source_label=f"On-Chain ({chain.capitalize()})")
+    _run_slither_for_chain_contracts(contracts)
 
 
 def _print_contracts_table(contracts: list, source_label: str) -> None:
@@ -369,6 +378,64 @@ def _run_shell_scan(session: ShellSession) -> None:
         _run_scan(session.path, session.url, session.address, session.chain, session.api_key)
     except typer.Exit:
         return
+
+
+def _run_slither(target: str) -> None:
+    slither_bin = shutil.which("slither")
+    if not slither_bin:
+        err_console.print(
+            "[bold yellow]Warning:[/bold yellow] Slither is not installed or not in PATH.\n"
+            "Install with: [cyan]pip install slither-analyzer[/cyan]"
+        )
+        return
+
+    console.print(f"[bold cyan]Slither:[/bold cyan] Running static analysis on [bold]{target}[/bold]")
+    try:
+        result = subprocess.run(
+            [slither_bin, target],
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+    except subprocess.TimeoutExpired:
+        err_console.print("[bold red]Error:[/bold red] Slither timed out.")
+        return
+    except Exception as exc:
+        err_console.print(f"[bold red]Error:[/bold red] Failed to run Slither: {exc}")
+        return
+
+    if result.stdout.strip():
+        console.print(result.stdout, markup=False)
+
+    if result.returncode != 0:
+        stderr = result.stderr.strip() or "Slither returned a non-zero exit code."
+        err_console.print(f"[bold red]Slither Error:[/bold red] {stderr}")
+    else:
+        console.print("[bold green]Slither finished successfully.[/bold green]")
+
+
+def _run_slither_for_chain_contracts(contracts: list) -> None:
+    with tempfile.TemporaryDirectory(prefix="vigil_chain_") as tmp_dir:
+        root = Path(tmp_dir)
+        for contract in contracts:
+            rel_path = _normalize_contract_rel_path(contract.path, contract.name)
+            file_path = root / rel_path
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            file_path.write_text(contract.content, encoding="utf-8")
+
+        _run_slither(str(root))
+
+
+def _normalize_contract_rel_path(path: str, fallback_name: str) -> Path:
+    normalized = path.replace("\\", "/").strip()
+    if not normalized:
+        normalized = fallback_name
+
+    parts = [part for part in PurePosixPath(normalized).parts if part not in {"", ".", ".."}]
+    if not parts:
+        parts = [fallback_name]
+
+    return Path(*parts)
 
 
 if __name__ == "__main__":

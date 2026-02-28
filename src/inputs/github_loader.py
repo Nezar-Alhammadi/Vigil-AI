@@ -63,6 +63,11 @@ class GitHubLoader:
             shutil.rmtree(self._temp_dir, ignore_errors=True)
             self._temp_dir = None
 
+    @property
+    def repo_path(self) -> str | None:
+        """Temporary cloned repository path while loaded."""
+        return self._temp_dir
+
     # ------------------------------------------------------------------
     def _clone(self) -> None:
         result = subprocess.run(
