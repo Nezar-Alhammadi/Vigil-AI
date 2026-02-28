@@ -55,10 +55,13 @@ class GitHubLoader:
             loader = LocalLoader(self._temp_dir)
             contracts = loader.load()
             
+            # الحل: عمل resolve للمسار المؤقت قبل استخراج المسار النسبي لتجنب أخطاء الـ Symlinks
+            resolved_temp = Path(self._temp_dir).resolve()
+            
             # إعادة وسم المصدر ليعرف المستدعي أن هذه الملفات من GitHub
             for c in contracts:
                 c.source = "github"
-                c.path = str(Path(c.path).relative_to(self._temp_dir))
+                c.path = str(Path(c.path).relative_to(resolved_temp))
             
             return contracts
         except Exception:
