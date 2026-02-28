@@ -45,10 +45,10 @@ class GitHubLoader:
     def load(self) -> List[ContractFile]:
         self._temp_dir = tempfile.mkdtemp(prefix="vigil_github_")
         try:
-            # 1. نسخ المستودع
+            # 1. نسخ المستودع (بالكامل بدون نسخ سطحي)
             self._clone()
 
-            # 2. تهيئة المشروع بالكامل وتثبيت التبعيات
+            # 2. تهيئة المشروع بالكامل وتثبيت التبعيات والمكتبات
             self._install_dependencies()
 
             # 3. تحميل الملفات باستخدام LocalLoader
@@ -79,15 +79,13 @@ class GitHubLoader:
         return self._temp_dir
 
     def _clone(self) -> None:
-        """عملية نسخ المستودع مع المحاولة الأولى لجلب الـ submodules."""
+        """عملية نسخ المستودع بالكامل مع الـ submodules."""
+        # تمت إزالة --depth 1 و --shallow-submodules لضمان عمل Foundry و git بشكل سليم
         result = subprocess.run(
             [
                 "git",
                 "clone",
-                "--depth",
-                "1",
                 "--recurse-submodules",
-                "--shallow-submodules",
                 self._clone_url,
                 self._temp_dir,
             ],
@@ -107,7 +105,7 @@ class GitHubLoader:
 
         root = Path(self._temp_dir)
 
-        # 1. تهيئة الـ Submodules الخاصة بـ Git
+        # 1. تهيئة وتحديث الـ Submodules الخاصة بـ Git
         subprocess.run(
             ["git", "submodule", "update", "--init", "--recursive"],
             cwd=self._temp_dir,
@@ -115,7 +113,7 @@ class GitHubLoader:
             timeout=60
         )
 
-        # 2. تثبيت مكتبات Node.js إذا كان المشروع يستخدم package.json (خطوة حاسمة لـ OpenZeppelin)
+        # 2. تثبيت مكتبات Node.js إذا كان المشروع يستخدم package.json (لجلب مكتبات مثل OpenZeppelin)
         if (root / "package.json").exists():
             if shutil.which("yarn"):
                 subprocess.run(["yarn", "install"], cwd=self._temp_dir, capture_output=True, timeout=120)
@@ -126,7 +124,7 @@ class GitHubLoader:
         if (root / "foundry.toml").exists():
             forge_bin = shutil.which("forge")
             if forge_bin:
-                # تثبيت مكتبات Foundry مع معامل --no-commit لمنع الأخطاء في النسخ المؤقتة
+                # تثبيت مكتبات Foundry مع معامل --no-commit
                 subprocess.run(
                     [forge_bin, "install", "--no-commit"], 
                     cwd=self._temp_dir, 
