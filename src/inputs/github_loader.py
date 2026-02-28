@@ -105,7 +105,7 @@ class GitHubLoader:
 
         root = Path(self._temp_dir)
 
-        # 1. تهيئة وتحديث الـ Submodules الخاصة بـ Git
+        # 1. تهيئة وتحديث الـ Submodules الخاصة بـ Git إن وجدت
         subprocess.run(
             ["git", "submodule", "update", "--init", "--recursive"],
             cwd=self._temp_dir,
@@ -113,24 +113,68 @@ class GitHubLoader:
             timeout=60
         )
 
-        # 2. تثبيت مكتبات Node.js إذا كان المشروع يستخدم package.json (لجلب مكتبات مثل OpenZeppelin)
+        # 2. تشغيل Makefile إذا وجد (كثير من مستودعات مسابقات التدقيق تستخدمه لتحميل المكتبات)
+        if (root / "Makefile").exists():
+            subprocess.run(["make"], cwd=self._temp_dir, capture_output=True, timeout=120)
+
+        # 3. تثبيت مكتبات Node.js إذا لزم الأمر
         if (root / "package.json").exists():
             if shutil.which("yarn"):
                 subprocess.run(["yarn", "install"], cwd=self._temp_dir, capture_output=True, timeout=120)
             elif shutil.which("npm"):
                 subprocess.run(["npm", "install", "--legacy-peer-deps"], cwd=self._temp_dir, capture_output=True, timeout=120)
 
-        # 3. تهيئة وبناء مشاريع Foundry
+        # 4. تهيئة مشاريع Foundry مع "المُحلل الذكي للاعتماديات الناقصة"
         if (root / "foundry.toml").exists():
             forge_bin = shutil.which("forge")
             if forge_bin:
-                # تثبيت مكتبات Foundry مع معامل --no-commit
                 subprocess.run(
                     [forge_bin, "install", "--no-commit"], 
                     cwd=self._temp_dir, 
                     capture_output=True, 
                     timeout=120
                 )
+                
+                # --- بداية المُحلل الذكي للاعتماديات (Smart Dependency Resolver) ---
+                lib_dir = root / "lib"
+                lib_dir.mkdir(exist_ok=True)
+                
+                # قاموس بأشهر المكتبات التي تنقص عادة في مشاريع مسابقات التدقيق
+                common_libs = {
+                    "openzeppelin-contracts": "OpenZeppelin/openzeppelin-contracts",
+                    "forge-std": "foundry-rs/forge-std",
+                    "solmate": "transmissions11/solmate",
+                    "base64": "Brechtpd/base64",
+                    "chainlink-brownie-contracts": "smartcontractkit/chainlink-brownie-contracts",
+                    "foundry-devops": "Cyfrin/foundry-devops",
+                    "solady": "Vectorized/solady"
+                }
+                
+                # فحص ملفات الكود لمعرفة ما الذي استورده المبرمج حقاً
+                needed_libs = set()
+                for sol_file in root.rglob("*.sol"):
+                    try:
+                        content = sol_file.read_text(errors="ignore")
+                        if "@openzeppelin" in content: needed_libs.add("openzeppelin-contracts")
+                        if "forge-std" in content: needed_libs.add("forge-std")
+                        if "solmate" in content: needed_libs.add("solmate")
+                        if "base64" in content.lower(): needed_libs.add("base64")
+                        if "chainlink" in content.lower(): needed_libs.add("chainlink-brownie-contracts")
+                        if "solady" in content.lower(): needed_libs.add("solady")
+                    except Exception:
+                        pass
+                
+                # التثبيت الإجباري للمكتبات المطلوبة إذا لم تكن موجودة في مجلد lib
+                for lib_name, repo_path in common_libs.items():
+                    if lib_name in needed_libs and not (lib_dir / lib_name).exists():
+                        subprocess.run(
+                            [forge_bin, "install", repo_path, "--no-commit"], 
+                            cwd=self._temp_dir, 
+                            capture_output=True, 
+                            timeout=120
+                        )
+                # --- نهاية المُحلل الذكي ---
+
                 # عمل بناء (Build) صامت مسبقاً للتأكد من تحميل الـ remappings وتهيئة المشروع لـ Slither
                 subprocess.run(
                     [forge_bin, "build"], 
@@ -139,7 +183,7 @@ class GitHubLoader:
                     timeout=120
                 )
 
-        # 4. تهيئة مشاريع Hardhat (إن وجدت)
+        # 5. تهيئة مشاريع Hardhat (إن وجدت)
         if (root / "hardhat.config.js").exists() or (root / "hardhat.config.ts").exists():
             npx_bin = shutil.which("npx")
             if npx_bin:
