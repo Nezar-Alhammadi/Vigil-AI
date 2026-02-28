@@ -413,7 +413,7 @@ def _run_slither(target: str, full: bool) -> None:
 
     cmd = [slither_bin, target]
     
-    # ── الفلترة السحرية لتجاهل المكتبات ──
+    # ── الفلترة لتجاهل المكتبات ──
     if not full:
         filter_regex = "(lib/|node_modules/|test/|tests/|script/|scripts/|mock/|mocks/|@openzeppelin/)"
         cmd.extend(["--filter-paths", filter_regex])
@@ -425,9 +425,11 @@ def _run_slither(target: str, full: bool) -> None:
             console.print("[dim]Mode: [bold yellow]Full Scan[/bold yellow] (Including all libraries and dependencies)[/dim]")
 
         try:
+            # استخدام stderr=subprocess.STDOUT لدمج كل المخرجات والأخطاء في قناة واحدة (stdout)
             result = subprocess.run(
                 cmd,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
                 timeout=600,
             )
@@ -438,10 +440,12 @@ def _run_slither(target: str, full: bool) -> None:
             err_console.print(f"[bold red]Error:[/bold red] Failed to run Slither: {exc}")
             return
 
-    # وضع تقرير Slither في صندوق منسق
-    if result.stdout.strip():
+    # استخراج النص الناتج ووضعه في الإطار المنسق
+    output_text = result.stdout.strip() if result.stdout else ""
+    
+    if output_text:
         slither_output = Panel(
-            Text.from_ansi(result.stdout), 
+            Text.from_ansi(output_text), 
             title="[bold orange3]Slither Analysis Results[/bold orange3]", 
             border_style="orange3",
             expand=False
@@ -449,16 +453,16 @@ def _run_slither(target: str, full: bool) -> None:
         console.print(slither_output)
 
     if result.returncode != 0:
-        stderr = result.stderr.strip() or "Slither returned a non-zero exit code."
-        err_console.print(f"[bold red]Slither Error:[/bold red] {stderr}")
-        if _looks_like_missing_foundry_deps(stderr):
+        if _looks_like_missing_foundry_deps(output_text):
             err_console.print(
                 "[bold yellow]Hint:[/bold yellow] This repository likely needs Foundry dependencies "
                 "(missing `lib/` imports). Try running [cyan]forge install[/cyan] inside the repo "
                 "or ensure submodules/dependencies are present."
             )
+        else:
+            err_console.print("[bold red]Slither scan completed with findings or errors (see details above).[/bold red]")
     else:
-        console.print("[bold green]Slither finished successfully.[/bold green]")
+        console.print("[bold green]Slither finished successfully with no issues found.[/bold green]")
 
 
 def _run_slither_for_chain_contracts(contracts: list, full: bool) -> None:
