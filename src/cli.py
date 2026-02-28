@@ -16,11 +16,13 @@ Commands
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+import os
 import shlex
 import shutil
 import subprocess
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Optional
 
@@ -411,9 +413,13 @@ def _run_slither(target: str, full: bool) -> None:
         )
         return
 
-    cmd = [slither_bin, target]
+    # إنشاء ملف مؤقت لحفظ تقرير JSON من Slither
+    fd, tmp_json_path = tempfile.mkstemp(suffix=".json", prefix="vigil_slither_")
+    os.close(fd)
+
+    cmd = [slither_bin, target, "--json", tmp_json_path]
     
-    # ── الفلترة لتجاهل المكتبات ──
+    # الفلترة لتجاهل المكتبات
     if not full:
         filter_regex = "(lib/|node_modules/|test/|tests/|script/|scripts/|mock/|mocks/|@openzeppelin/)"
         cmd.extend(["--filter-paths", filter_regex])
@@ -425,7 +431,6 @@ def _run_slither(target: str, full: bool) -> None:
             console.print("[dim]Mode: [bold yellow]Full Scan[/bold yellow] (Including all libraries and dependencies)[/dim]")
 
         try:
-            # استخدام stderr=subprocess.STDOUT لدمج كل المخرجات والأخطاء في قناة واحدة (stdout)
             result = subprocess.run(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -435,24 +440,32 @@ def _run_slither(target: str, full: bool) -> None:
             )
         except subprocess.TimeoutExpired:
             err_console.print("[bold red]Error:[/bold red] Slither timed out.")
+            _cleanup_temp_file(tmp_json_path)
             return
         except Exception as exc:
             err_console.print(f"[bold red]Error:[/bold red] Failed to run Slither: {exc}")
+            _cleanup_temp_file(tmp_json_path)
             return
 
-    # استخراج النص الناتج ووضعه في الإطار المنسق
-    output_text = result.stdout.strip() if result.stdout else ""
+    # محاولة استخراج النتائج من ملف JSON
+    parsed_successfully = False
+    detectors = []
     
-    if output_text:
-        slither_output = Panel(
-            Text.from_ansi(output_text), 
-            title="[bold orange3]Slither Analysis Results[/bold orange3]", 
-            border_style="orange3",
-            expand=False
-        )
-        console.print(slither_output)
+    if os.path.exists(tmp_json_path) and os.path.getsize(tmp_json_path) > 0:
+        try:
+            with open(tmp_json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if "results" in data and "detectors" in data["results"]:
+                    detectors = data["results"]["detectors"]
+                    parsed_successfully = True
+        except Exception:
+            pass
+            
+    _cleanup_temp_file(tmp_json_path)
 
-    if result.returncode != 0:
+    # في حال فشل الفحص تماماً (مثلاً مشكلة في الكومبايلر ولم يتم إنشاء JSON)
+    if not parsed_successfully and result.returncode != 0:
+        output_text = result.stdout.strip()
         if _looks_like_missing_foundry_deps(output_text):
             err_console.print(
                 "[bold yellow]Hint:[/bold yellow] This repository likely needs Foundry dependencies "
@@ -460,9 +473,81 @@ def _run_slither(target: str, full: bool) -> None:
                 "or ensure submodules/dependencies are present."
             )
         else:
-            err_console.print("[bold red]Slither scan completed with findings or errors (see details above).[/bold red]")
+            slither_error = Panel(
+                Text.from_ansi(output_text), 
+                title="[bold red]Compilation or Slither Error[/bold red]", 
+                border_style="red"
+            )
+            console.print(slither_error)
+        return
+
+    # طباعة الجدول المنظم إذا تم استخراج الثغرات بنجاح
+    if not detectors:
+        console.print("\n[bold green]Slither finished successfully with no issues found.[/bold green] ✅")
     else:
-        console.print("[bold green]Slither finished successfully with no issues found.[/bold green]")
+        _print_slither_table(detectors)
+
+
+def _print_slither_table(detectors: list) -> None:
+    # ترتيب مستويات الخطورة من الأعلى إلى الأقل
+    impact_weights = {
+        "High": 1,
+        "Medium": 2,
+        "Low": 3,
+        "Informational": 4,
+        "Optimization": 5
+    }
+    
+    # فرز القائمة بناءً على مستوى الخطورة
+    detectors.sort(key=lambda x: impact_weights.get(x.get("impact", "Informational"), 99))
+
+    table = Table(
+        title="\n[bold orange3]Slither Vulnerability Report[/bold orange3]",
+        box=box.HEAVY_EDGE,
+        show_lines=True,
+        header_style="bold cyan"
+    )
+    
+    table.add_column("Severity", justify="center", width=12)
+    table.add_column("Detector (Rule)", style="bold white", width=25)
+    table.add_column("Description / Location", style="dim")
+
+    for d in detectors:
+        impact = d.get("impact", "Informational")
+        check = d.get("check", "Unknown")
+        description = d.get("description", "").strip()
+
+        # تنسيق الألوان بناءً على الخطورة
+        if impact == "High":
+            impact_str = "[bold red]High[/bold red]"
+        elif impact == "Medium":
+            impact_str = "[bold yellow]Medium[/bold yellow]"
+        elif impact == "Low":
+            impact_str = "[bold green]Low[/bold green]"
+        elif impact == "Optimization":
+            impact_str = "[bold blue]Optimization[/bold blue]"
+        else:
+            impact_str = f"[bold cyan]{impact}[/bold cyan]"
+
+        # تنظيف الوصف من المسافات والفراغات الزائدة ليكون أنيقاً داخل الجدول
+        clean_desc = " ".join(description.split())
+        
+        # لعدم جعل الوصف طويلاً جداً ومزعجاً، يمكننا اقتصاص أول سطر فقط
+        # (Slither عادة يضع السطر الأول كخلاصة)
+        short_desc = description.split('\n')[0] if '\n' in description else clean_desc
+
+        table.add_row(impact_str, check, short_desc)
+
+    console.print(table)
+    console.print(f"\n[bold orange3]Total issues found: {len(detectors)}[/bold orange3]")
+
+
+def _cleanup_temp_file(filepath: str) -> None:
+    if os.path.exists(filepath):
+        try:
+            os.remove(filepath)
+        except OSError:
+            pass
 
 
 def _run_slither_for_chain_contracts(contracts: list, full: bool) -> None:
