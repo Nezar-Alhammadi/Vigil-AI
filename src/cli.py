@@ -29,6 +29,7 @@ from rich import box
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from inputs import ChainLoader, GitHubLoader, LocalLoader, SUPPORTED_CHAINS
 
@@ -147,8 +148,7 @@ def _run_scan(
 
 
 def _run_local_scan(path: str, full: bool) -> None:
-    console.print("[bold cyan]Input:[/bold cyan]  Local Path")
-    console.print(f"[bold cyan]Target:[/bold cyan] {path}\n")
+    console.print(Panel(f"[bold cyan]Input:[/bold cyan]  Local Path\n[bold cyan]Target:[/bold cyan] {path}", border_style="green", expand=False))
 
     loader = LocalLoader(path)
     ok, msg = loader.validate()
@@ -164,8 +164,7 @@ def _run_local_scan(path: str, full: bool) -> None:
 
 
 def _run_github_scan(url: str, full: bool) -> None:
-    console.print("[bold cyan]Input:[/bold cyan]  GitHub URL")
-    console.print(f"[bold cyan]Target:[/bold cyan] {url}\n")
+    console.print(Panel(f"[bold cyan]Input:[/bold cyan]  GitHub URL\n[bold cyan]Target:[/bold cyan] {url}", border_style="blue", expand=False))
 
     loader = GitHubLoader(url)
     ok, msg = loader.validate()
@@ -174,7 +173,7 @@ def _run_github_scan(url: str, full: bool) -> None:
         raise typer.Exit(code=1)
 
     try:
-        with console.status("[bold green]Cloning repository..."):
+        with console.status("[bold green]Cloning repository & installing dependencies..."):
             contracts = loader.load()
             repo_path = loader.repo_path
     except RuntimeError as exc:
@@ -192,9 +191,12 @@ def _run_chain_scan(address: str, chain: str, api_key: str, full: bool) -> None:
     cfg = SUPPORTED_CHAINS.get(chain.lower(), {})
     explorer = cfg.get("explorer_name", chain)
 
-    console.print("[bold cyan]Input:[/bold cyan]  On-Chain Address")
-    console.print(f"[bold cyan]Chain:[/bold cyan]  {chain.capitalize()}  ({explorer})")
-    console.print(f"[bold cyan]Target:[/bold cyan] {address}\n")
+    info = (
+        f"[bold cyan]Input:[/bold cyan]  On-Chain Address\n"
+        f"[bold cyan]Chain:[/bold cyan]  {chain.capitalize()} ({explorer})\n"
+        f"[bold cyan]Target:[/bold cyan] {address}"
+    )
+    console.print(Panel(info, border_style="magenta", expand=False))
 
     loader = ChainLoader(address, chain, api_key)
     ok, msg = loader.validate()
@@ -227,7 +229,7 @@ def _print_contracts_table(contracts: list, source_label: str) -> None:
 
     table = Table(
         title=f"[bold green]Contracts Found[/bold green] | Source: {source_label}",
-        box=box.ROUNDED,
+        box=box.HEAVY_EDGE,
         show_lines=True,
         header_style="bold cyan",
     )
@@ -237,12 +239,16 @@ def _print_contracts_table(contracts: list, source_label: str) -> None:
     table.add_column("Size", justify="right", style="dim")
 
     for idx, contract in enumerate(contracts, start=1):
-        lang_color = "yellow" if contract.language == "vyper" else "blue"
+        if contract.language == "vyper":
+            lang_str = "[yellow]Vyper[/yellow]"
+        else:
+            lang_str = "[blue]Solidity[/blue]"
+            
         size_str = f"{len(contract.content):,} chars"
         table.add_row(
             str(idx),
             contract.name,
-            f"[{lang_color}]{contract.language.capitalize()}[/{lang_color}]",
+            lang_str,
             size_str,
         )
 
@@ -314,33 +320,37 @@ def _run_interactive_shell() -> None:
 
 
 def _print_shell_help() -> None:
-    console.print(
-        "[bold cyan]Commands:[/bold cyan]\n"
-        "  help                      Show this help\n"
-        "  show                      Show current session values\n"
-        "  set path <value>          Set local path source (clears url/address)\n"
-        "  set url <value>           Set GitHub URL source (clears path/address)\n"
-        "  set address <value>       Set on-chain address source (clears path/url)\n"
-        f"  set chain <value>         Set chain ({', '.join(SUPPORTED_CHAINS)})\n"
-        "  set api_key <value>       Set explorer API key\n"
-        "  set full <true/false>     Toggle Full Scan vs Focus Scan (ignore libs)\n"
-        "  reset                     Clear all session values\n"
-        "  scan                      Run scan using current session values\n"
-        "  clear                     Clear terminal view\n"
-        "  exit | quit               Exit interactive mode\n"
-    )
+    table = Table(title="[bold cyan]Interactive Shell Commands[/bold cyan]", box=box.SIMPLE_HEAVY, header_style="bold yellow")
+    table.add_column("Command", style="bold green")
+    table.add_column("Description", style="white")
+
+    table.add_row("help / ?", "Show this help menu")
+    table.add_row("show", "Show current session values")
+    table.add_row("set path <value>", "Set local path source (clears url/address)")
+    table.add_row("set url <value>", "Set GitHub URL source (clears path/address)")
+    table.add_row("set address <value>", "Set on-chain address source (clears path/url)")
+    table.add_row("set chain <value>", f"Set chain ({', '.join(SUPPORTED_CHAINS)})")
+    table.add_row("set api_key <value>", "Set explorer API key")
+    table.add_row("set full <true/false>", "Toggle Full Scan vs Focus Scan (ignore libs)")
+    table.add_row("reset", "Clear all session values")
+    table.add_row("scan", "Run scan using current session values")
+    table.add_row("clear", "Clear terminal view")
+    table.add_row("exit / quit / q", "Exit interactive mode")
+
+    console.print(table)
 
 
 def _print_shell_state(session: ShellSession) -> None:
     table = Table(title="Current Session", box=box.ROUNDED, header_style="bold cyan")
     table.add_column("Key", style="bold white")
     table.add_column("Value")
-    table.add_row("path", session.path or "-")
-    table.add_row("url", session.url or "-")
-    table.add_row("address", session.address or "-")
+    
+    table.add_row("path", session.path or "[dim]-[/dim]")
+    table.add_row("url", session.url or "[dim]-[/dim]")
+    table.add_row("address", session.address or "[dim]-[/dim]")
     table.add_row("chain", session.chain)
-    table.add_row("api_key", "***" if session.api_key else "-")
-    table.add_row("full (scan all libs)", str(session.full))
+    table.add_row("api_key", "***" if session.api_key else "[dim]-[/dim]")
+    table.add_row("full scan", "[green]True[/green]" if session.full else "[yellow]False[/yellow]")
     console.print(table)
 
 
@@ -382,7 +392,7 @@ def _handle_shell_set(session: ShellSession, args: list[str]) -> None:
         err_console.print(f"[bold red]Error:[/bold red] Unknown field '{field}'.")
         return
 
-    console.print(f"[green]Set {field}.[/green]")
+    console.print(f"[green]Set {field} successfully.[/green]")
 
 
 def _run_shell_scan(session: ShellSession) -> None:
@@ -405,32 +415,38 @@ def _run_slither(target: str, full: bool) -> None:
     
     # ── الفلترة السحرية لتجاهل المكتبات ──
     if not full:
-        # مسارات المكتبات والاختبارات الشائعة التي لا نريد فحصها
         filter_regex = "(lib/|node_modules/|test/|tests/|script/|scripts/|mock/|mocks/|@openzeppelin/)"
         cmd.extend(["--filter-paths", filter_regex])
 
-    console.print(f"\n[bold cyan]Slither:[/bold cyan] Running static analysis on [bold]{target}[/bold]")
-    if not full:
-        console.print("[dim]Mode: [bold green]Focus Scan[/bold green] (Ignoring libraries and test files. Use --full to scan all)[/dim]\n")
-    else:
-        console.print("[dim]Mode: [bold yellow]Full Scan[/bold yellow] (Including all libraries and dependencies)[/dim]\n")
+    with console.status(f"[bold cyan]Running Slither analysis on [white]{target}[/white]..."):
+        if not full:
+            console.print("[dim]Mode: [bold green]Focus Scan[/bold green] (Ignoring libraries and test files. Use --full to scan all)[/dim]")
+        else:
+            console.print("[dim]Mode: [bold yellow]Full Scan[/bold yellow] (Including all libraries and dependencies)[/dim]")
 
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=600,
-        )
-    except subprocess.TimeoutExpired:
-        err_console.print("[bold red]Error:[/bold red] Slither timed out.")
-        return
-    except Exception as exc:
-        err_console.print(f"[bold red]Error:[/bold red] Failed to run Slither: {exc}")
-        return
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
+        except subprocess.TimeoutExpired:
+            err_console.print("[bold red]Error:[/bold red] Slither timed out.")
+            return
+        except Exception as exc:
+            err_console.print(f"[bold red]Error:[/bold red] Failed to run Slither: {exc}")
+            return
 
+    # وضع تقرير Slither في صندوق منسق
     if result.stdout.strip():
-        console.print(result.stdout, markup=False)
+        slither_output = Panel(
+            Text.from_ansi(result.stdout), 
+            title="[bold orange3]Slither Analysis Results[/bold orange3]", 
+            border_style="orange3",
+            expand=False
+        )
+        console.print(slither_output)
 
     if result.returncode != 0:
         stderr = result.stderr.strip() or "Slither returned a non-zero exit code."
