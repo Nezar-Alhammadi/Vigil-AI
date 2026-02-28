@@ -410,6 +410,12 @@ def _run_slither(target: str) -> None:
     if result.returncode != 0:
         stderr = result.stderr.strip() or "Slither returned a non-zero exit code."
         err_console.print(f"[bold red]Slither Error:[/bold red] {stderr}")
+        if _looks_like_missing_foundry_deps(stderr):
+            err_console.print(
+                "[bold yellow]Hint:[/bold yellow] This repository likely needs Foundry dependencies "
+                "(missing `lib/` imports). Try running [cyan]forge install[/cyan] inside the repo "
+                "or ensure submodules/dependencies are present."
+            )
     else:
         console.print("[bold green]Slither finished successfully.[/bold green]")
 
@@ -436,6 +442,17 @@ def _normalize_contract_rel_path(path: str, fallback_name: str) -> Path:
         parts = [fallback_name]
 
     return Path(*parts)
+
+
+def _looks_like_missing_foundry_deps(stderr: str) -> bool:
+    markers = [
+        "Unable to resolve imports",
+        "Source \"lib/",
+        "No such file or directory",
+        "forge' returned non-zero exit code",
+        "InvalidCompilation",
+    ]
+    return any(marker in stderr for marker in markers)
 
 
 if __name__ == "__main__":

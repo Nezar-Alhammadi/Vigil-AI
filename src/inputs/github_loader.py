@@ -71,7 +71,16 @@ class GitHubLoader:
     # ------------------------------------------------------------------
     def _clone(self) -> None:
         result = subprocess.run(
-            ["git", "clone", "--depth", "1", self._clone_url, self._temp_dir],
+            [
+                "git",
+                "clone",
+                "--depth",
+                "1",
+                "--recurse-submodules",
+                "--shallow-submodules",
+                self._clone_url,
+                self._temp_dir,
+            ],
             capture_output=True,
             text=True,
             timeout=120,
