@@ -17,7 +17,7 @@ from typing import List, Tuple
 from .local_loader import ContractFile, LocalLoader
 
 
-# Accepts: https://github.com/owner/repo  (with or without .git, trailing slash, or sub-path)
+# يقبل الروابط بصيغة: https://github.com/owner/repo
 _GITHUB_PATTERN = re.compile(
     r"^https?://github\.com/[\w\-\.]+/[\w\-\.]+(\.git)?(/.*)?$",
     re.IGNORECASE,
@@ -25,11 +25,11 @@ _GITHUB_PATTERN = re.compile(
 
 
 class GitHubLoader:
-    """Clones a GitHub repository and extracts smart contract source files."""
+    """يقوم بنسخ مستودع GitHub واستخراج ملفات العقود الذكية."""
 
     def __init__(self, url: str):
         self.original_url = url.strip()
-        # Build the clean clone URL (always end with .git)
+        # بناء رابط النسخ النظيف (ينتهي دائماً بـ .git)
         base = self.original_url.split(".git")[0].rstrip("/")
         self._clone_url = base + ".git"
         self._temp_dir: str | None = None
@@ -46,12 +46,31 @@ class GitHubLoader:
         self._temp_dir = tempfile.mkdtemp(prefix="vigil_github_")
         try:
             self._clone()
+
+            # --- الإصلاح البرمجي لمشكلة مكتبات Foundry ---
+            if self._temp_dir:
+                root_path = Path(self._temp_dir)
+                # التحقق مما إذا كان المشروع يعتمد على إطار عمل Foundry
+                if (root_path / "foundry.toml").exists():
+                    forge_bin = shutil.which("forge")
+                    if forge_bin:
+                        # تشغيل أمر تثبيت المكتبات (dependencies) داخل المجلد المؤقت
+                        subprocess.run(
+                            [forge_bin, "install"],
+                            cwd=self._temp_dir,
+                            capture_output=True,
+                            text=True,
+                            timeout=300
+                        )
+            # ---------------------------------------------
+
             loader = LocalLoader(self._temp_dir)
             contracts = loader.load()
-            # Re-tag source so the caller knows these came from GitHub
+            
+            # إعادة وسم المصدر ليعرف المستدعي أن هذه الملفات من GitHub
             for c in contracts:
                 c.source = "github"
-                # Make path relative-looking for cleaner output
+                # جعل المسار نسبياً ليكون الإخراج أنظف
                 c.path = str(Path(c.path).relative_to(self._temp_dir))
             return contracts
         except Exception:
@@ -65,7 +84,7 @@ class GitHubLoader:
 
     @property
     def repo_path(self) -> str | None:
-        """Temporary cloned repository path while loaded."""
+        """المسار المؤقت للمستودع المنسوخ."""
         return self._temp_dir
 
     # ------------------------------------------------------------------
