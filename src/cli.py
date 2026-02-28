@@ -11,6 +11,7 @@ Commands
   vigil-ai scan --address <addr>   Fetch a deployed contract and scan it
                --chain   <chain>   (default: ethereum)
                --api-key <key>     Optional explorer API key
+               --full              Scan everything including libraries
 """
 
 from __future__ import annotations
@@ -43,11 +44,11 @@ err_console = Console(stderr=True)
 def show_welcome_banner() -> None:
     banner_text = """
 [bold cyan]__      __ [/bold cyan]  [bold blue]_____ [/bold blue]  [bold cyan]  ____  [/bold cyan]  [bold blue]_____ [/bold blue]  [bold cyan] _      [/bold cyan]      [bold white]   ___   [/bold white] [bold cyan] ____  [/bold cyan]
-[bold cyan]\\ \\    / / [/bold cyan] [bold blue]|_   _|[/bold blue]  [bold cyan] / __ \\ [/bold cyan] [bold blue]|_   _|[/bold blue]  [bold cyan]| |     [/bold cyan]      [bold white]  / _ \\  [/bold white] [bold cyan]|_   _| [/bold cyan]
-[bold cyan] \\ \\  / /  [/bold cyan]   [bold blue]| |  [/bold blue]  [bold cyan]| |  \\_|[/bold cyan]   [bold blue]| |  [/bold blue]  [bold cyan]| |     [/bold cyan]      [bold white] | | | | [/bold white]   [bold cyan]| |   [/bold cyan]
-[bold cyan]  \\ \\/ /   [/bold cyan]   [bold blue]| |  [/bold blue]  [bold cyan]| | __  [/bold cyan]   [bold blue]| |  [/bold blue]  [bold cyan]| |     [/bold cyan]      [bold white] | |_| | [/bold white]   [bold cyan]| |   [/bold cyan]
-[bold cyan]   \\  /    [/bold cyan]  [bold blue]_| |_ [/bold blue]  [bold cyan]| |_\\ \\ [/bold cyan]  [bold blue]_| |_ [/bold blue]  [bold cyan]| |____ [/bold cyan]      [bold white] |  _  | [/bold white]  [bold cyan]_| |_  [/bold cyan]
-[bold cyan]    \\/     [/bold cyan] [bold blue]|_____|[/bold blue]  [bold cyan] \\____/ [/bold cyan] [bold blue]|_____|[/bold blue]  [bold cyan]|______[/bold cyan]       [bold white] |_| |_| [/bold white] [bold cyan]|_____|[/bold cyan]
+[bold cyan]\ \    / / [/bold cyan] [bold blue]|_   _|[/bold blue]  [bold cyan] / __ \ [/bold cyan] [bold blue]|_   _|[/bold blue]  [bold cyan]| |     [/bold cyan]      [bold white]  / _ \  [/bold white] [bold cyan]|_   _| [/bold cyan]
+[bold cyan] \ \  / /  [/bold cyan]   [bold blue]| |  [/bold blue]  [bold cyan]| |  \_|[/bold cyan]   [bold blue]| |  [/bold blue]  [bold cyan]| |     [/bold cyan]      [bold white] | | | | [/bold white]   [bold cyan]| |   [/bold cyan]
+[bold cyan]  \ \/ /   [/bold cyan]   [bold blue]| |  [/bold blue]  [bold cyan]| | __  [/bold cyan]   [bold blue]| |  [/bold blue]  [bold cyan]| |     [/bold cyan]      [bold white] | |_| | [/bold white]   [bold cyan]| |   [/bold cyan]
+[bold cyan]   \  /    [/bold cyan]  [bold blue]_| |_ [/bold blue]  [bold cyan]| |_\ \ [/bold cyan]  [bold blue]_| |_ [/bold blue]  [bold cyan]| |____ [/bold cyan]      [bold white] |  _  | [/bold white]  [bold cyan]_| |_  [/bold cyan]
+[bold cyan]    \/     [/bold cyan] [bold blue]|_____|[/bold blue]  [bold cyan] \____/ [/bold cyan] [bold blue]|_____|[/bold blue]  [bold cyan]|______[/bold cyan]       [bold white] |_| |_| [/bold white] [bold cyan]|_____|[/bold cyan]
 
           [dim italic]Autonomous Web3 Smart Contract Auditor[/dim italic]
 """
@@ -92,6 +93,11 @@ def scan(
         "--api-key",
         help="Explorer API key (Etherscan, BscScan, ...). Increases rate limits.",
     ),
+    full: bool = typer.Option(
+        False,
+        "--full",
+        help="Run a full scan including libraries and test folders (e.g. lib/, test/).",
+    ),
 ) -> None:
     """
     Scan a smart contract for security vulnerabilities.
@@ -102,7 +108,7 @@ def scan(
       --url      GitHub repository URL
       --address  Deployed on-chain contract address
     """
-    _run_scan(path, url, address, chain, api_key)
+    _run_scan(path, url, address, chain, api_key, full)
 
 
 def _run_scan(
@@ -111,6 +117,7 @@ def _run_scan(
     address: Optional[str],
     chain: str,
     api_key: str,
+    full: bool,
 ) -> None:
     sources_given = sum(x is not None for x in [path, url, address])
 
@@ -132,14 +139,14 @@ def _run_scan(
         raise typer.Exit(code=1)
 
     if path is not None:
-        _run_local_scan(path)
+        _run_local_scan(path, full)
     elif url is not None:
-        _run_github_scan(url)
+        _run_github_scan(url, full)
     else:
-        _run_chain_scan(address, chain, api_key)  # type: ignore[arg-type]
+        _run_chain_scan(address, chain, api_key, full)  # type: ignore[arg-type]
 
 
-def _run_local_scan(path: str) -> None:
+def _run_local_scan(path: str, full: bool) -> None:
     console.print("[bold cyan]Input:[/bold cyan]  Local Path")
     console.print(f"[bold cyan]Target:[/bold cyan] {path}\n")
 
@@ -153,10 +160,10 @@ def _run_local_scan(path: str) -> None:
         contracts = loader.load()
 
     _print_contracts_table(contracts, source_label="Local Path")
-    _run_slither(path)
+    _run_slither(path, full)
 
 
-def _run_github_scan(url: str) -> None:
+def _run_github_scan(url: str, full: bool) -> None:
     console.print("[bold cyan]Input:[/bold cyan]  GitHub URL")
     console.print(f"[bold cyan]Target:[/bold cyan] {url}\n")
 
@@ -176,12 +183,12 @@ def _run_github_scan(url: str) -> None:
     else:
         _print_contracts_table(contracts, source_label="GitHub Repository")
         if repo_path:
-            _run_slither(repo_path)
+            _run_slither(repo_path, full)
     finally:
         loader.cleanup()
 
 
-def _run_chain_scan(address: str, chain: str, api_key: str) -> None:
+def _run_chain_scan(address: str, chain: str, api_key: str, full: bool) -> None:
     cfg = SUPPORTED_CHAINS.get(chain.lower(), {})
     explorer = cfg.get("explorer_name", chain)
 
@@ -210,7 +217,7 @@ def _run_chain_scan(address: str, chain: str, api_key: str) -> None:
         raise typer.Exit(code=1)
 
     _print_contracts_table(contracts, source_label=f"On-Chain ({chain.capitalize()})")
-    _run_slither_for_chain_contracts(contracts)
+    _run_slither_for_chain_contracts(contracts, full)
 
 
 def _print_contracts_table(contracts: list, source_label: str) -> None:
@@ -253,6 +260,7 @@ class ShellSession:
     address: Optional[str] = None
     chain: str = "ethereum"
     api_key: str = ""
+    full: bool = False
 
 
 def _run_interactive_shell() -> None:
@@ -315,6 +323,7 @@ def _print_shell_help() -> None:
         "  set address <value>       Set on-chain address source (clears path/url)\n"
         f"  set chain <value>         Set chain ({', '.join(SUPPORTED_CHAINS)})\n"
         "  set api_key <value>       Set explorer API key\n"
+        "  set full <true/false>     Toggle Full Scan vs Focus Scan (ignore libs)\n"
         "  reset                     Clear all session values\n"
         "  scan                      Run scan using current session values\n"
         "  clear                     Clear terminal view\n"
@@ -331,12 +340,13 @@ def _print_shell_state(session: ShellSession) -> None:
     table.add_row("address", session.address or "-")
     table.add_row("chain", session.chain)
     table.add_row("api_key", "***" if session.api_key else "-")
+    table.add_row("full (scan all libs)", str(session.full))
     console.print(table)
 
 
 def _handle_shell_set(session: ShellSession, args: list[str]) -> None:
     if len(args) < 2:
-        err_console.print("[bold red]Error:[/bold red] Usage: set <path|url|address|chain|api_key> <value>")
+        err_console.print("[bold red]Error:[/bold red] Usage: set <path|url|address|chain|api_key|full> <value>")
         return
 
     field = args[0].lower()
@@ -366,6 +376,8 @@ def _handle_shell_set(session: ShellSession, args: list[str]) -> None:
         session.chain = chain
     elif field in {"api_key", "apikey"}:
         session.api_key = value
+    elif field == "full":
+        session.full = value.lower() in {"true", "1", "yes", "y"}
     else:
         err_console.print(f"[bold red]Error:[/bold red] Unknown field '{field}'.")
         return
@@ -375,12 +387,12 @@ def _handle_shell_set(session: ShellSession, args: list[str]) -> None:
 
 def _run_shell_scan(session: ShellSession) -> None:
     try:
-        _run_scan(session.path, session.url, session.address, session.chain, session.api_key)
+        _run_scan(session.path, session.url, session.address, session.chain, session.api_key, session.full)
     except typer.Exit:
         return
 
 
-def _run_slither(target: str) -> None:
+def _run_slither(target: str, full: bool) -> None:
     slither_bin = shutil.which("slither")
     if not slither_bin:
         err_console.print(
@@ -389,10 +401,23 @@ def _run_slither(target: str) -> None:
         )
         return
 
-    console.print(f"[bold cyan]Slither:[/bold cyan] Running static analysis on [bold]{target}[/bold]")
+    cmd = [slither_bin, target]
+    
+    # ── الفلترة السحرية لتجاهل المكتبات ──
+    if not full:
+        # مسارات المكتبات والاختبارات الشائعة التي لا نريد فحصها
+        filter_regex = "(lib/|node_modules/|test/|tests/|script/|scripts/|mock/|mocks/|@openzeppelin/)"
+        cmd.extend(["--filter-paths", filter_regex])
+
+    console.print(f"\n[bold cyan]Slither:[/bold cyan] Running static analysis on [bold]{target}[/bold]")
+    if not full:
+        console.print("[dim]Mode: [bold green]Focus Scan[/bold green] (Ignoring libraries and test files. Use --full to scan all)[/dim]\n")
+    else:
+        console.print("[dim]Mode: [bold yellow]Full Scan[/bold yellow] (Including all libraries and dependencies)[/dim]\n")
+
     try:
         result = subprocess.run(
-            [slither_bin, target],
+            cmd,
             capture_output=True,
             text=True,
             timeout=600,
@@ -420,7 +445,7 @@ def _run_slither(target: str) -> None:
         console.print("[bold green]Slither finished successfully.[/bold green]")
 
 
-def _run_slither_for_chain_contracts(contracts: list) -> None:
+def _run_slither_for_chain_contracts(contracts: list, full: bool) -> None:
     with tempfile.TemporaryDirectory(prefix="vigil_chain_") as tmp_dir:
         root = Path(tmp_dir)
         for contract in contracts:
@@ -429,7 +454,7 @@ def _run_slither_for_chain_contracts(contracts: list) -> None:
             file_path.parent.mkdir(parents=True, exist_ok=True)
             file_path.write_text(contract.content, encoding="utf-8")
 
-        _run_slither(str(root))
+        _run_slither(str(root), full)
 
 
 def _normalize_contract_rel_path(path: str, fallback_name: str) -> Path:
