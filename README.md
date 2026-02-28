@@ -1,25 +1,77 @@
 # Vigil-AI
-Advanced AI-driven autonomous auditor for Web3 smart contracts. Detecting vulnerabilities with precision.
 
-# 🛡️ Vigil AI: The Autonomous Web3 Security Auditor
+Vigil-AI is a CLI tool for collecting smart-contract sources from:
+- Local path
+- GitHub repository
+- On-chain verified contract address
 
-**Vigil AI** is a next-generation AI Agent designed to revolutionize smart contract auditing. By leveraging advanced Large Language Models (LLMs) and security-specific heuristics, Vigil AI scans, detects, and reports critical vulnerabilities in Web3 protocols before they can be exploited.
+It currently focuses on source loading and scan input preparation.
 
----
+## Requirements
 
-## ✨ Key Features
-* **Autonomous Auditing:** Scans complex smart contracts with deep logical reasoning.
-* **Vulnerability Detection:** Identifies Reentrancy, Logic errors, Access Control issues, and more.
-* **Research-Driven:** Built to bridge the gap between CTF challenges and real-world mainnet security.
-* **Detailed Reporting:** Generates comprehensive security reports with suggested fixes.
+- Python 3.10+
+- Git (needed for `--url` scans)
 
-## 🚀 Why Vigil AI?
-In the fast-evolving world of Web3, manual audits are slow and expensive. Vigil AI provides a **24/7 vigilant eye** on your code, ensuring that security is integrated into the development lifecycle from day one.
-
-## 🛠️ Getting Started
-*(Coming Soon: Instructions on how to run the CLI tool)*
+## Run Locally
 
 ```bash
-git clone [https://github.com/Nezar-Alhammadi/Vigil-AI.git](https://github.com/Nezar-Alhammadi/Vigil-AI.git)
-cd Vigil-AI
-# Installation steps will be added here
+python -m venv .venv
+# Windows
+.venv\Scripts\activate
+# Linux/macOS
+source .venv/bin/activate
+
+pip install -r requirements.txt
+python src/cli.py --help
+```
+
+Examples:
+
+```bash
+python src/cli.py scan --path ./contracts
+python src/cli.py scan --url https://github.com/OpenZeppelin/openzeppelin-contracts
+python src/cli.py scan --address 0x0000000000000000000000000000000000000000 --chain ethereum
+```
+
+## Run with Docker
+
+Build image:
+
+```bash
+docker build -t vigil-ai .
+```
+
+Show help:
+
+```bash
+docker run --rm vigil-ai --help
+```
+
+Scan a local folder (mount your contracts folder):
+
+```bash
+docker run --rm -v "${PWD}:/work" vigil-ai scan --path /work/contracts
+```
+
+Windows PowerShell variant:
+
+```powershell
+docker run --rm -v "${PWD}:/work" vigil-ai scan --path /work/contracts
+```
+
+Scan a GitHub repository:
+
+```bash
+docker run --rm vigil-ai scan --url https://github.com/OpenZeppelin/openzeppelin-contracts
+```
+
+Scan on-chain address:
+
+```bash
+docker run --rm vigil-ai scan --address 0x0000000000000000000000000000000000000000 --chain ethereum
+```
+
+## Notes
+
+- `src/ai_engine` and `src/auditor` are still placeholders.
+- Current output lists discovered contract files and metadata.
