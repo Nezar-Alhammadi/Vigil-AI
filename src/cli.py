@@ -413,79 +413,75 @@ def _run_slither(target: str, full: bool) -> None:
         )
         return
 
-    # إنشاء ملف مؤقت لحفظ تقرير JSON من Slither
-    fd, tmp_json_path = tempfile.mkstemp(suffix=".json", prefix="vigil_slither_")
-    os.close(fd)
-
-    cmd = [slither_bin, target, "--json", tmp_json_path]
-    
-    # الفلترة لتجاهل المكتبات
-    if not full:
-        filter_regex = "(lib/|node_modules/|test/|tests/|script/|scripts/|mock/|mocks/|@openzeppelin/)"
-        cmd.extend(["--filter-paths", filter_regex])
-
-    with console.status(f"[bold cyan]Running Slither analysis on [white]{target}[/white]..."):
+    # إنشاء مجلد مؤقت بدلاً من ملف، لكي ينشئ Slither الملف براحته دون مشاكل "exists already"
+    with tempfile.TemporaryDirectory(prefix="vigil_slither_") as tmp_dir:
+        tmp_json_path = os.path.join(tmp_dir, "report.json")
+        
+        cmd = [slither_bin, target, "--json", tmp_json_path]
+        
+        # الفلترة لتجاهل المكتبات
         if not full:
-            console.print("[dim]Mode: [bold green]Focus Scan[/bold green] (Ignoring libraries and test files. Use --full to scan all)[/dim]")
-        else:
-            console.print("[dim]Mode: [bold yellow]Full Scan[/bold yellow] (Including all libraries and dependencies)[/dim]")
+            filter_regex = "(lib/|node_modules/|test/|tests/|script/|scripts/|mock/|mocks/|@openzeppelin/)"
+            cmd.extend(["--filter-paths", filter_regex])
 
-        try:
-            result = subprocess.run(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                timeout=600,
-            )
-        except subprocess.TimeoutExpired:
-            err_console.print("[bold red]Error:[/bold red] Slither timed out.")
-            _cleanup_temp_file(tmp_json_path)
+        with console.status(f"[bold cyan]Running Slither analysis on [white]{target}[/white]..."):
+            if not full:
+                console.print("[dim]Mode: [bold green]Focus Scan[/bold green] (Ignoring libraries and test files. Use --full to scan all)[/dim]")
+            else:
+                console.print("[dim]Mode: [bold yellow]Full Scan[/bold yellow] (Including all libraries and dependencies)[/dim]")
+
+            try:
+                result = subprocess.run(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    timeout=600,
+                )
+            except subprocess.TimeoutExpired:
+                err_console.print("[bold red]Error:[/bold red] Slither timed out.")
+                return
+            except Exception as exc:
+                err_console.print(f"[bold red]Error:[/bold red] Failed to run Slither: {exc}")
+                return
+
+        # محاولة استخراج النتائج من ملف JSON
+        parsed_successfully = False
+        detectors = []
+        
+        if os.path.exists(tmp_json_path) and os.path.getsize(tmp_json_path) > 0:
+            try:
+                with open(tmp_json_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if "results" in data and "detectors" in data["results"]:
+                        detectors = data["results"]["detectors"]
+                        parsed_successfully = True
+            except Exception:
+                pass
+
+        # في حال فشل الفحص تماماً ولم يتم إنشاء JSON (أو فشل قراءته)
+        if not parsed_successfully and result.returncode != 0:
+            output_text = result.stdout.strip()
+            if _looks_like_missing_foundry_deps(output_text):
+                err_console.print(
+                    "[bold yellow]Hint:[/bold yellow] This repository likely needs Foundry dependencies "
+                    "(missing `lib/` imports). Try running [cyan]forge install[/cyan] inside the repo "
+                    "or ensure submodules/dependencies are present."
+                )
+            else:
+                slither_error = Panel(
+                    Text.from_ansi(output_text), 
+                    title="[bold red]Compilation or Slither Error[/bold red]", 
+                    border_style="red"
+                )
+                console.print(slither_error)
             return
-        except Exception as exc:
-            err_console.print(f"[bold red]Error:[/bold red] Failed to run Slither: {exc}")
-            _cleanup_temp_file(tmp_json_path)
-            return
 
-    # محاولة استخراج النتائج من ملف JSON
-    parsed_successfully = False
-    detectors = []
-    
-    if os.path.exists(tmp_json_path) and os.path.getsize(tmp_json_path) > 0:
-        try:
-            with open(tmp_json_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if "results" in data and "detectors" in data["results"]:
-                    detectors = data["results"]["detectors"]
-                    parsed_successfully = True
-        except Exception:
-            pass
-            
-    _cleanup_temp_file(tmp_json_path)
-
-    # في حال فشل الفحص تماماً (مثلاً مشكلة في الكومبايلر ولم يتم إنشاء JSON)
-    if not parsed_successfully and result.returncode != 0:
-        output_text = result.stdout.strip()
-        if _looks_like_missing_foundry_deps(output_text):
-            err_console.print(
-                "[bold yellow]Hint:[/bold yellow] This repository likely needs Foundry dependencies "
-                "(missing `lib/` imports). Try running [cyan]forge install[/cyan] inside the repo "
-                "or ensure submodules/dependencies are present."
-            )
+        # طباعة الجدول المنظم إذا تم استخراج الثغرات بنجاح
+        if not detectors:
+            console.print("\n[bold green]Slither finished successfully with no issues found.[/bold green] ✅")
         else:
-            slither_error = Panel(
-                Text.from_ansi(output_text), 
-                title="[bold red]Compilation or Slither Error[/bold red]", 
-                border_style="red"
-            )
-            console.print(slither_error)
-        return
-
-    # طباعة الجدول المنظم إذا تم استخراج الثغرات بنجاح
-    if not detectors:
-        console.print("\n[bold green]Slither finished successfully with no issues found.[/bold green] ✅")
-    else:
-        _print_slither_table(detectors)
+            _print_slither_table(detectors)
 
 
 def _print_slither_table(detectors: list) -> None:
@@ -529,25 +525,14 @@ def _print_slither_table(detectors: list) -> None:
         else:
             impact_str = f"[bold cyan]{impact}[/bold cyan]"
 
-        # تنظيف الوصف من المسافات والفراغات الزائدة ليكون أنيقاً داخل الجدول
+        # تنظيف الوصف واقتصاص السطر الأول فقط ليكون الجدول أنيقاً
         clean_desc = " ".join(description.split())
-        
-        # لعدم جعل الوصف طويلاً جداً ومزعجاً، يمكننا اقتصاص أول سطر فقط
-        # (Slither عادة يضع السطر الأول كخلاصة)
         short_desc = description.split('\n')[0] if '\n' in description else clean_desc
 
         table.add_row(impact_str, check, short_desc)
 
     console.print(table)
     console.print(f"\n[bold orange3]Total issues found: {len(detectors)}[/bold orange3]")
-
-
-def _cleanup_temp_file(filepath: str) -> None:
-    if os.path.exists(filepath):
-        try:
-            os.remove(filepath)
-        except OSError:
-            pass
 
 
 def _run_slither_for_chain_contracts(contracts: list, full: bool) -> None:
