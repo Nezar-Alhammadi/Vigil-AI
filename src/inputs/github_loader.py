@@ -29,7 +29,6 @@ class GitHubLoader:
 
     def __init__(self, url: str):
         self.original_url = url.strip()
-        # بناء رابط النسخ النظيف
         base = self.original_url.split(".git")[0].rstrip("/")
         self._clone_url = base + ".git"
         self._temp_dir: str | None = None
@@ -45,20 +44,14 @@ class GitHubLoader:
     def load(self) -> List[ContractFile]:
         self._temp_dir = tempfile.mkdtemp(prefix="vigil_github_")
         try:
-            # 1. نسخ المستودع (بالكامل بدون نسخ سطحي)
             self._clone()
-
-            # 2. تهيئة المشروع بالكامل وتثبيت التبعيات والمكتبات
             self._install_dependencies()
 
-            # 3. تحميل الملفات باستخدام LocalLoader
             loader = LocalLoader(self._temp_dir)
             contracts = loader.load()
             
-            # الحل: عمل resolve للمسار المؤقت قبل استخراج المسار النسبي لتجنب أخطاء الـ Symlinks
             resolved_temp = Path(self._temp_dir).resolve()
             
-            # إعادة وسم المصدر ليعرف المستدعي أن هذه الملفات من GitHub
             for c in contracts:
                 c.source = "github"
                 c.path = str(Path(c.path).relative_to(resolved_temp))
@@ -75,12 +68,9 @@ class GitHubLoader:
 
     @property
     def repo_path(self) -> str | None:
-        """المسار المؤقت للمستودع المنسوخ."""
         return self._temp_dir
 
     def _clone(self) -> None:
-        """عملية نسخ المستودع بالكامل مع الـ submodules."""
-        # تمت إزالة --depth 1 و --shallow-submodules لضمان عمل Foundry و git بشكل سليم
         result = subprocess.run(
             [
                 "git",
@@ -104,8 +94,10 @@ class GitHubLoader:
             return
 
         root = Path(self._temp_dir)
+        lib_dir = root / "lib"
+        lib_dir.mkdir(exist_ok=True)
 
-        # 1. تهيئة وتحديث الـ Submodules الخاصة بـ Git إن وجدت
+        # 1. تهيئة الـ Submodules الخاصة بـ Git إن وجدت
         subprocess.run(
             ["git", "submodule", "update", "--init", "--recursive"],
             cwd=self._temp_dir,
@@ -113,7 +105,7 @@ class GitHubLoader:
             timeout=60
         )
 
-        # 2. تشغيل Makefile إذا وجد (كثير من مستودعات مسابقات التدقيق تستخدمه لتحميل المكتبات)
+        # 2. تشغيل Makefile إذا وجد
         if (root / "Makefile").exists():
             subprocess.run(["make"], cwd=self._temp_dir, capture_output=True, timeout=120)
 
@@ -124,58 +116,54 @@ class GitHubLoader:
             elif shutil.which("npm"):
                 subprocess.run(["npm", "install", "--legacy-peer-deps"], cwd=self._temp_dir, capture_output=True, timeout=120)
 
-        # 4. تهيئة مشاريع Foundry مع "المُحلل الذكي للاعتماديات الناقصة"
+        # 4. المُحلل الذكي للاعتماديات (الإجبار المباشر عبر HTTPS متجاوزاً أخطاء SSH)
+        common_libs = {
+            "openzeppelin-contracts": "https://github.com/OpenZeppelin/openzeppelin-contracts.git",
+            "forge-std": "https://github.com/foundry-rs/forge-std.git",
+            "solmate": "https://github.com/transmissions11/solmate.git",
+            "base64": "https://github.com/Brechtpd/base64.git",
+            "chainlink-brownie-contracts": "https://github.com/smartcontractkit/chainlink-brownie-contracts.git",
+            "solady": "https://github.com/Vectorized/solady.git"
+        }
+        
+        needed_libs = set()
+        for sol_file in root.rglob("*.sol"):
+            try:
+                content = sol_file.read_text(errors="ignore")
+                if "@openzeppelin" in content or "openzeppelin-contracts" in content: needed_libs.add("openzeppelin-contracts")
+                if "forge-std" in content: needed_libs.add("forge-std")
+                if "solmate" in content: needed_libs.add("solmate")
+                if "base64" in content.lower(): needed_libs.add("base64")
+                if "chainlink" in content.lower(): needed_libs.add("chainlink-brownie-contracts")
+                if "solady" in content.lower(): needed_libs.add("solady")
+            except Exception:
+                pass
+        
+        # التنزيل المباشر كملفات (Brute-force Clone)
+        for lib_name, repo_url in common_libs.items():
+            if lib_name in needed_libs:
+                target_path = lib_dir / lib_name
+                
+                # التحقق الذكي: هل المجلد يحتوي فعلياً على ملفات العقود (.sol)؟
+                # إذا كان يحتوي على .git فقط، فهذا يعني أن submodule فشل
+                has_sol_files = target_path.exists() and any(target_path.rglob("*.sol"))
+                
+                if not has_sol_files:
+                    # تدمير المجلد المعطوب أو الفارغ
+                    if target_path.exists():
+                        shutil.rmtree(target_path, ignore_errors=True)
+                    
+                    # تحميل المكتبة بقوة عبر HTTPS
+                    subprocess.run(
+                        ["git", "clone", "--depth", "1", repo_url, str(target_path)], 
+                        capture_output=True, 
+                        timeout=120
+                    )
+
+        # 5. تهيئة وبناء Foundry
         if (root / "foundry.toml").exists():
             forge_bin = shutil.which("forge")
             if forge_bin:
-                subprocess.run(
-                    [forge_bin, "install", "--no-commit"], 
-                    cwd=self._temp_dir, 
-                    capture_output=True, 
-                    timeout=120
-                )
-                
-                # --- بداية المُحلل الذكي للاعتماديات (Smart Dependency Resolver) ---
-                lib_dir = root / "lib"
-                lib_dir.mkdir(exist_ok=True)
-                
-                # قاموس بأشهر المكتبات التي تنقص عادة في مشاريع مسابقات التدقيق
-                common_libs = {
-                    "openzeppelin-contracts": "OpenZeppelin/openzeppelin-contracts",
-                    "forge-std": "foundry-rs/forge-std",
-                    "solmate": "transmissions11/solmate",
-                    "base64": "Brechtpd/base64",
-                    "chainlink-brownie-contracts": "smartcontractkit/chainlink-brownie-contracts",
-                    "foundry-devops": "Cyfrin/foundry-devops",
-                    "solady": "Vectorized/solady"
-                }
-                
-                # فحص ملفات الكود لمعرفة ما الذي استورده المبرمج حقاً
-                needed_libs = set()
-                for sol_file in root.rglob("*.sol"):
-                    try:
-                        content = sol_file.read_text(errors="ignore")
-                        if "@openzeppelin" in content: needed_libs.add("openzeppelin-contracts")
-                        if "forge-std" in content: needed_libs.add("forge-std")
-                        if "solmate" in content: needed_libs.add("solmate")
-                        if "base64" in content.lower(): needed_libs.add("base64")
-                        if "chainlink" in content.lower(): needed_libs.add("chainlink-brownie-contracts")
-                        if "solady" in content.lower(): needed_libs.add("solady")
-                    except Exception:
-                        pass
-                
-                # التثبيت الإجباري للمكتبات المطلوبة إذا لم تكن موجودة في مجلد lib
-                for lib_name, repo_path in common_libs.items():
-                    if lib_name in needed_libs and not (lib_dir / lib_name).exists():
-                        subprocess.run(
-                            [forge_bin, "install", repo_path, "--no-commit"], 
-                            cwd=self._temp_dir, 
-                            capture_output=True, 
-                            timeout=120
-                        )
-                # --- نهاية المُحلل الذكي ---
-
-                # عمل بناء (Build) صامت مسبقاً للتأكد من تحميل الـ remappings وتهيئة المشروع لـ Slither
                 subprocess.run(
                     [forge_bin, "build"], 
                     cwd=self._temp_dir, 
@@ -183,7 +171,7 @@ class GitHubLoader:
                     timeout=120
                 )
 
-        # 5. تهيئة مشاريع Hardhat (إن وجدت)
+        # 6. تهيئة مشاريع Hardhat (إن وجدت)
         if (root / "hardhat.config.js").exists() or (root / "hardhat.config.ts").exists():
             npx_bin = shutil.which("npx")
             if npx_bin:
