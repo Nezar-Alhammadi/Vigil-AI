@@ -97,7 +97,18 @@ class GitHubLoader:
         lib_dir = root / "lib"
         lib_dir.mkdir(exist_ok=True)
 
-        # 1. تهيئة الـ Submodules الخاصة بـ Git إن وجدت
+        # 0. إصلاح مشكلة روابط SSH في الـ gitmodules والتي تمنع التحميل السليم
+        gitmodules_path = root / ".gitmodules"
+        if gitmodules_path.exists():
+            content = gitmodules_path.read_text(errors="ignore")
+            # تحويل SSH إلى HTTPS لضمان نجاح التنزيل
+            content = re.sub(r"git@github\.com:", "https://github.com/", content)
+            content = re.sub(r"ssh://git@github\.com/", "https://github.com/", content)
+            gitmodules_path.write_text(content)
+            # مزامنة الروابط الجديدة
+            subprocess.run(["git", "submodule", "sync"], cwd=self._temp_dir, capture_output=True)
+
+        # 1. تهيئة وتحديث الـ Submodules الخاصة بـ Git
         subprocess.run(
             ["git", "submodule", "update", "--init", "--recursive"],
             cwd=self._temp_dir,
@@ -116,20 +127,20 @@ class GitHubLoader:
             elif shutil.which("npm"):
                 subprocess.run(["npm", "install", "--legacy-peer-deps"], cwd=self._temp_dir, capture_output=True, timeout=120)
 
-        # 4. المُحلل الذكي للاعتماديات (الإجبار المباشر عبر HTTPS متجاوزاً أخطاء SSH)
-        common_libs = {
-            "openzeppelin-contracts": "https://github.com/OpenZeppelin/openzeppelin-contracts.git",
-            "forge-std": "https://github.com/foundry-rs/forge-std.git",
-            "solmate": "https://github.com/transmissions11/solmate.git",
-            "base64": "https://github.com/Brechtpd/base64.git",
-            "chainlink-brownie-contracts": "https://github.com/smartcontractkit/chainlink-brownie-contracts.git",
-            "solady": "https://github.com/Vectorized/solady.git"
-        }
-        
+        # 4. المُحلل الذكي للاعتماديات (Smart Dependency Resolver) - واعي بالإصدارات!
         needed_libs = set()
-        for sol_file in root.rglob("*.sol"):
+        sol_files = list(root.rglob("*.sol"))
+        
+        # اكتشاف إصدار Solidity لتحديد الفرع الصحيح لمكتبة OpenZeppelin
+        solc_version = "0.8" 
+        for sol_file in sol_files:
             try:
                 content = sol_file.read_text(errors="ignore")
+                if "pragma solidity ^0.7" in content or "pragma solidity 0.7" in content:
+                    solc_version = "0.7"
+                elif "pragma solidity ^0.6" in content or "pragma solidity 0.6" in content:
+                    solc_version = "0.6"
+                
                 if "@openzeppelin" in content or "openzeppelin-contracts" in content: needed_libs.add("openzeppelin-contracts")
                 if "forge-std" in content: needed_libs.add("forge-std")
                 if "solmate" in content: needed_libs.add("solmate")
@@ -139,23 +150,36 @@ class GitHubLoader:
             except Exception:
                 pass
         
-        # التنزيل المباشر كملفات (Brute-force Clone)
-        for lib_name, repo_url in common_libs.items():
+        # تحديد الفرع المناسب بناءً على إصدار Solidity الخاص بالمشروع
+        oz_branch = "master"
+        if solc_version == "0.7": 
+            oz_branch = "v3.4.2-solc-0.7"
+        elif solc_version == "0.6": 
+            oz_branch = "v3.4.2"
+
+        common_libs = {
+            "openzeppelin-contracts": ("https://github.com/OpenZeppelin/openzeppelin-contracts.git", oz_branch),
+            "forge-std": ("https://github.com/foundry-rs/forge-std.git", "master"),
+            "solmate": ("https://github.com/transmissions11/solmate.git", "main"),
+            "base64": ("https://github.com/Brechtpd/base64.git", "main"),
+            "chainlink-brownie-contracts": ("https://github.com/smartcontractkit/chainlink-brownie-contracts.git", "main"),
+            "solady": ("https://github.com/Vectorized/solady.git", "main")
+        }
+        
+        # التنزيل المباشر كملفات (Brute-force Clone) للمكتبات المفقودة فقط
+        for lib_name, (repo_url, branch) in common_libs.items():
             if lib_name in needed_libs:
                 target_path = lib_dir / lib_name
                 
-                # التحقق الذكي: هل المجلد يحتوي فعلياً على ملفات العقود (.sol)؟
-                # إذا كان يحتوي على .git فقط، فهذا يعني أن submodule فشل
+                # نتحقق هل المجلد يحتوي فعلياً على ملفات العقود (.sol) لكي لا ننخدع بمجلدات فارغة
                 has_sol_files = target_path.exists() and any(target_path.rglob("*.sol"))
                 
                 if not has_sol_files:
-                    # تدمير المجلد المعطوب أو الفارغ
                     if target_path.exists():
                         shutil.rmtree(target_path, ignore_errors=True)
                     
-                    # تحميل المكتبة بقوة عبر HTTPS
                     subprocess.run(
-                        ["git", "clone", "--depth", "1", repo_url, str(target_path)], 
+                        ["git", "clone", "--depth", "1", "--branch", branch, repo_url, str(target_path)], 
                         capture_output=True, 
                         timeout=120
                     )
