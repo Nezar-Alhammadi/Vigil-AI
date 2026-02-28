@@ -25,11 +25,11 @@ _GITHUB_PATTERN = re.compile(
 
 
 class GitHubLoader:
-    """يقوم بنسخ مستودع GitHub واستخراج ملفات العقود الذكية."""
+    """يقوم بنسخ مستودع GitHub واستخراج ملفات العقود الذكية مع تثبيت التبعيات."""
 
     def __init__(self, url: str):
         self.original_url = url.strip()
-        # بناء رابط النسخ النظيف (ينتهي دائماً بـ .git)
+        # بناء رابط النسخ النظيف
         base = self.original_url.split(".git")[0].rstrip("/")
         self._clone_url = base + ".git"
         self._temp_dir: str | None = None
@@ -45,33 +45,21 @@ class GitHubLoader:
     def load(self) -> List[ContractFile]:
         self._temp_dir = tempfile.mkdtemp(prefix="vigil_github_")
         try:
+            # 1. نسخ المستودع
             self._clone()
 
-            # --- الإصلاح البرمجي لمشكلة مكتبات Foundry ---
-            if self._temp_dir:
-                root_path = Path(self._temp_dir)
-                # التحقق مما إذا كان المشروع يعتمد على إطار عمل Foundry
-                if (root_path / "foundry.toml").exists():
-                    forge_bin = shutil.which("forge")
-                    if forge_bin:
-                        # تشغيل أمر تثبيت المكتبات (dependencies) داخل المجلد المؤقت
-                        subprocess.run(
-                            [forge_bin, "install"],
-                            cwd=self._temp_dir,
-                            capture_output=True,
-                            text=True,
-                            timeout=300
-                        )
-            # ---------------------------------------------
+            # 2. تثبيت التبعيات (Foundry / Submodules)
+            self._install_dependencies()
 
+            # 3. تحميل الملفات باستخدام LocalLoader
             loader = LocalLoader(self._temp_dir)
             contracts = loader.load()
             
             # إعادة وسم المصدر ليعرف المستدعي أن هذه الملفات من GitHub
             for c in contracts:
                 c.source = "github"
-                # جعل المسار نسبياً ليكون الإخراج أنظف
                 c.path = str(Path(c.path).relative_to(self._temp_dir))
+            
             return contracts
         except Exception:
             self.cleanup()
@@ -87,8 +75,8 @@ class GitHubLoader:
         """المسار المؤقت للمستودع المنسوخ."""
         return self._temp_dir
 
-    # ------------------------------------------------------------------
     def _clone(self) -> None:
+        """عملية نسخ المستودع مع المحاولة الأولى لجلب الـ submodules."""
         result = subprocess.run(
             [
                 "git",
@@ -108,3 +96,31 @@ class GitHubLoader:
             raise RuntimeError(
                 f"git clone failed for '{self._clone_url}':\n{result.stderr.strip()}"
             )
+
+    def _install_dependencies(self) -> None:
+        """محاولة تثبيت المكتبات الناقصة (Submodules و Foundry)."""
+        if not self._temp_dir:
+            return
+
+        root = Path(self._temp_dir)
+
+        # 1. التأكد من تحديث الـ submodules يدوياً في حال فشل الـ clone التلقائي
+        subprocess.run(
+            ["git", "submodule", "update", "--init", "--recursive"],
+            cwd=self._temp_dir,
+            capture_output=True,
+            timeout=60
+        )
+
+        # 2. إذا وجد ملف foundry.toml، نحاول تشغيل forge install
+        if (root / "foundry.toml").exists():
+            forge_bin = shutil.which("forge")
+            if forge_bin:
+                # ملاحظة: قد يستغرق هذا وقتاً طويلاً حسب حجم المكتبات
+                subprocess.run(
+                    [forge_bin, "install"],
+                    cwd=self._temp_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=300
+                )
