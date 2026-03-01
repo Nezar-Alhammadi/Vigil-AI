@@ -98,7 +98,7 @@ class AIEngine:
             )
 
         header   = _build_report_header(project_root, len(targets), self._model)
-        sections: list[str] = []
+        sections: list[Optional[str]] = [None] * len(targets)
 
         with Progress(
             SpinnerColumn(),
@@ -109,28 +109,15 @@ class AIEngine:
             transient=False,
         ) as progress:
             task_id = progress.add_task(
-                "[cyan]AI Analysis — starting...", total=len(targets)
+                f"[cyan]AI Analysis — starting (Max workers: 5)...", total=len(targets)
             )
 
-            for idx, detector in enumerate(targets, start=1):
+            import concurrent.futures
+
+            def process_detector(idx_and_detector: tuple[int, dict]) -> tuple[int, str, dict]:
+                idx, detector = idx_and_detector
                 rule   = detector.get("check", "unknown-rule")
                 impact = detector.get("impact", "Unknown")
-
-                if impact == "High":
-                    color = "bold red"
-                elif impact == "Medium":
-                    color = "bold yellow"
-                else:
-                    color = "bold blue"
-                
-                progress.update(
-                    task_id,
-                    description=(
-                        f"[cyan]Analysing [bold white]{rule}[/bold white] "
-                        f"([{color}]{impact}[/{color}]) "
-                        f"[dim]({idx}/{len(targets)})[/dim]"
-                    ),
-                )
 
                 code_snippet, file_path = self._extract_code_context(
                     detector, project_root
@@ -142,8 +129,40 @@ class AIEngine:
                     code_snippet=code_snippet,
                     file_path=file_path,
                 )
-                sections.append(section_md)
-                progress.advance(task_id)
+                return idx, section_md, detector
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                futures = {
+                    executor.submit(process_detector, (idx, detector)): idx 
+                    for idx, detector in enumerate(targets)
+                }
+                
+                completed_count = 0
+                for future in concurrent.futures.as_completed(futures):
+                    idx, section_md, detector = future.result()
+                    sections[idx] = section_md
+                    
+                    completed_count += 1
+                    
+                    rule   = detector.get("check", "unknown-rule")
+                    impact = detector.get("impact", "Unknown")
+                    
+                    if impact == "High":
+                        color = "bold red"
+                    elif impact == "Medium":
+                        color = "bold yellow"
+                    else:
+                        color = "bold blue"
+                    
+                    progress.update(
+                        task_id,
+                        description=(
+                            f"[cyan]Analysed [bold white]{rule}[/bold white] "
+                            f"([{color}]{impact}[/{color}]) "
+                            f"[dim]({completed_count}/{len(targets)})[/dim]"
+                        ),
+                        advance=1
+                    )
 
         progress.stop()
         console.print(
