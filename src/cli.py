@@ -482,6 +482,28 @@ def _run_slither(target: str, full: bool) -> None:
             console.print("\n[bold green]Slither finished successfully with no issues found.[/bold green] ✅")
         else:
             _print_slither_table(detectors)
+            
+            if typer.confirm("\nDo you want to generate a detailed AI Audit Report using OpenRouter?"):
+                try:
+                    from ai_engine.analyzer import AIEngine
+                    engine = AIEngine()
+                    
+                    with console.status("[bold green]Initializing AI Engine & Extracting Code Context..."):
+                        # Just a short delay status for UX, handled mostly inside AIEngine
+                        pass
+                        
+                    report_md = engine.analyze_vulnerabilities(detectors, target)
+                    
+                    # Ensure we have a valid report string and it is not just the empty fallback
+                    if report_md and not report_md.startswith("## No High or Medium"):
+                        report_path = os.path.join(os.getcwd(), "Audit_Report.md")
+                        with open(report_path, "w", encoding="utf-8") as f:
+                            f.write(report_md)
+                        console.print(f"\n[bold green]Success![/bold green] Detailed AI report saved to: [cyan]{report_path}[/cyan]")
+                    else:
+                        console.print(f"\n[bold yellow]Note:[/bold yellow] {report_md}")
+                except Exception as e:
+                    err_console.print(f"\n[bold red]AI Engine Error:[/bold red] {e}")
 
 
 def _print_slither_table(detectors: list) -> None:
