@@ -104,6 +104,11 @@ def scan(
         "--full",
         help="Run a full scan including libraries and test folders (e.g. lib/, test/).",
     ),
+    pdf: bool = typer.Option(
+        False,
+        "--pdf",
+        help="Export the final AI audit report as a PDF document.",
+    ),
 ) -> None:
     """
     Scan a smart contract for security vulnerabilities.
@@ -114,7 +119,7 @@ def scan(
       --url      GitHub repository URL
       --address  Deployed on-chain contract address
     """
-    _run_scan(path, url, address, chain, api_key, full)
+    _run_scan(path, url, address, chain, api_key, full, pdf)
 
 
 def _run_scan(
@@ -124,6 +129,7 @@ def _run_scan(
     chain: str,
     api_key: str,
     full: bool,
+    pdf: bool,
 ) -> None:
     sources_given = sum(x is not None for x in [path, url, address])
 
@@ -145,14 +151,14 @@ def _run_scan(
         raise typer.Exit(code=1)
 
     if path is not None:
-        _run_local_scan(path, full)
+        _run_local_scan(path, full, pdf)
     elif url is not None:
-        _run_github_scan(url, full)
+        _run_github_scan(url, full, pdf)
     else:
-        _run_chain_scan(address, chain, api_key, full)  # type: ignore[arg-type]
+        _run_chain_scan(address, chain, api_key, full, pdf)  # type: ignore[arg-type]
 
 
-def _run_local_scan(path: str, full: bool) -> None:
+def _run_local_scan(path: str, full: bool, pdf: bool) -> None:
     console.print(Panel(f"[bold cyan]Input:[/bold cyan]  Local Path\n[bold cyan]Target:[/bold cyan] {path}", border_style="green", expand=False))
 
     loader = LocalLoader(path)
@@ -165,10 +171,10 @@ def _run_local_scan(path: str, full: bool) -> None:
         contracts = loader.load()
 
     _print_contracts_table(contracts, source_label="Local Path")
-    _run_static_analyzers(path, full)
+    _run_static_analyzers(path, full, pdf)
 
 
-def _run_github_scan(url: str, full: bool) -> None:
+def _run_github_scan(url: str, full: bool, pdf: bool) -> None:
     console.print(Panel(f"[bold cyan]Input:[/bold cyan]  GitHub URL\n[bold cyan]Target:[/bold cyan] {url}", border_style="blue", expand=False))
 
     loader = GitHubLoader(url)
@@ -187,12 +193,12 @@ def _run_github_scan(url: str, full: bool) -> None:
     else:
         _print_contracts_table(contracts, source_label="GitHub Repository")
         if repo_path:
-            _run_static_analyzers(repo_path, full)
+            _run_static_analyzers(repo_path, full, pdf)
     finally:
         loader.cleanup()
 
 
-def _run_chain_scan(address: str, chain: str, api_key: str, full: bool) -> None:
+def _run_chain_scan(address: str, chain: str, api_key: str, full: bool, pdf: bool) -> None:
     cfg = SUPPORTED_CHAINS.get(chain.lower(), {})
     explorer = cfg.get("explorer_name", chain)
 
@@ -228,7 +234,7 @@ def _run_chain_scan(address: str, chain: str, api_key: str, full: bool) -> None:
         raise typer.Exit(code=1)
 
     _print_contracts_table(contracts, source_label=f"On-Chain ({chain.capitalize()})")
-    _run_static_analyzers_for_chain_contracts(contracts, full)
+    _run_static_analyzers_for_chain_contracts(contracts, full, pdf)
 
 
 def _print_contracts_table(contracts: list, source_label: str) -> None:
@@ -406,7 +412,7 @@ def _handle_shell_set(session: ShellSession, args: list[str]) -> None:
 
 def _run_shell_scan(session: ShellSession) -> None:
     try:
-        _run_scan(session.path, session.url, session.address, session.chain, session.api_key, session.full)
+        _run_scan(session.path, session.url, session.address, session.chain, session.api_key, session.full, False)
     except typer.Exit:
         return
 
@@ -592,7 +598,7 @@ def _run_aderyn(target: str) -> list:
         return detectors
 
 
-def _run_static_analyzers(target: str, full: bool) -> None:
+def _run_static_analyzers(target: str, full: bool, pdf: bool) -> None:
     all_detectors = []
     
     slither_detectors = _run_slither(target, full)
@@ -645,8 +651,19 @@ def _run_static_analyzers(target: str, full: bool) -> None:
                     
                     console.print(f"\n[bold green]Success![/bold green] Detailed AI report saved to: [cyan]{report_path}[/cyan]\n")
                     
+                    if pdf:
+                        try:
+                            from md2pdf.core import md2pdf
+                            pdf_path = os.path.join(os.getcwd(), "Audit_Report.pdf")
+                            md2pdf(pdf_path, md_content=report_md)
+                            console.print(f"[bold green]PDF Report saved to:[/bold green] [cyan]{pdf_path}[/cyan]\n")
+                        except ImportError:
+                            console.print("[bold yellow]Warning:[/bold yellow] md2pdf is not installed. PDF export skipped. (Install with: pip install md2pdf)\n")
+                        except Exception as e:
+                            console.print(f"[bold yellow]Warning:[/bold yellow] Failed to generate PDF: {e}\n")
+                    
                     if typer.confirm("Do you want to open the report in your code editor now?", default=True):
-                        typer.launch(report_path)
+                            typer.launch(report_path)
                 else:
                     console.print(f"\n[bold yellow]Note:[/bold yellow] {report_md}")
             except Exception as e:
@@ -709,7 +726,7 @@ def _print_vulnerability_table(detectors: list) -> None:
     console.print(f"\n[bold orange3]Total issues found: {len(detectors)}[/bold orange3]")
 
 
-def _run_static_analyzers_for_chain_contracts(contracts: list, full: bool) -> None:
+def _run_static_analyzers_for_chain_contracts(contracts: list, full: bool, pdf: bool) -> None:
     with tempfile.TemporaryDirectory(prefix="vigil_chain_") as tmp_dir:
         root = Path(tmp_dir)
         for contract in contracts:
@@ -718,7 +735,7 @@ def _run_static_analyzers_for_chain_contracts(contracts: list, full: bool) -> No
             file_path.parent.mkdir(parents=True, exist_ok=True)
             file_path.write_text(contract.content, encoding="utf-8")
 
-        _run_static_analyzers(str(root), full)
+        _run_static_analyzers(str(root), full, pdf)
 
 
 def _normalize_contract_rel_path(path: str, fallback_name: str) -> Path:
