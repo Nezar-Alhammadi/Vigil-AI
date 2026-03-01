@@ -33,6 +33,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 from rich.markdown import Markdown
+from rich.prompt import Prompt
 
 from inputs import ChainLoader, GitHubLoader, LocalLoader, SUPPORTED_CHAINS
 
@@ -405,6 +406,33 @@ def _run_shell_scan(session: ShellSession) -> None:
         return
 
 
+def prompt_for_model() -> str:
+    console.print("\n[bold cyan]Select an AI Model for the Audit Report:[/bold cyan]")
+    options = {
+        "1": "anthropic/claude-3.5-sonnet",
+        "2": "openai/gpt-4o",
+        "3": "google/gemini-1.5-pro",
+        "4": "meta-llama/llama-3-70b-instruct",
+        "5": "Custom"
+    }
+    console.print("  [1] anthropic/claude-3.5-sonnet (Recommended)")
+    console.print("  [2] openai/gpt-4o")
+    console.print("  [3] google/gemini-1.5-pro")
+    console.print("  [4] meta-llama/llama-3-70b-instruct")
+    console.print("  [5] Custom (Type any OpenRouter model name)")
+    
+    choice = Prompt.ask(
+        "\nEnter your choice",
+        choices=["1", "2", "3", "4", "5"],
+        default="1"
+    )
+    
+    if choice == "5":
+        custom_model = typer.prompt("Enter the exact OpenRouter model name")
+        return custom_model.strip()
+    return options[choice]
+
+
 def _run_slither(target: str, full: bool) -> None:
     slither_bin = shutil.which("slither")
     if not slither_bin:
@@ -487,9 +515,24 @@ def _run_slither(target: str, full: bool) -> None:
             if typer.confirm("\nDo you want to generate a detailed AI Audit Report using OpenRouter?"):
                 try:
                     from ai_engine.analyzer import AIEngine
-                    engine = AIEngine()
                     
-                    with console.status("[bold green]Initializing AI Engine & Extracting Code Context..."):
+                    config_dir = Path.home() / ".vigil-ai"
+                    key_file = config_dir / "openrouter_key"
+                    
+                    if not os.environ.get("OPENROUTER_API_KEY"):
+                        if key_file.exists():
+                            api_key = key_file.read_text(encoding="utf-8").strip()
+                            os.environ["OPENROUTER_API_KEY"] = api_key
+                        else:
+                            api_key = typer.prompt("🔑 Please enter your OpenRouter API Key (Will be saved securely for future uses)", hide_input=True).strip()
+                            config_dir.mkdir(parents=True, exist_ok=True)
+                            key_file.write_text(api_key, encoding="utf-8")
+                            os.environ["OPENROUTER_API_KEY"] = api_key
+
+                    selected_model = prompt_for_model()
+                    engine = AIEngine(model=selected_model)
+                    
+                    with console.status(f"[bold green]Initializing AI Engine & Extracting Code Context using {selected_model}..."):
                         # Just a short delay status for UX, handled mostly inside AIEngine
                         pass
                         
