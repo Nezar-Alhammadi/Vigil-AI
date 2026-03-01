@@ -1,7 +1,7 @@
 """
 Vigil-AI — AI Analysis Engine
 ==============================
-Sends High/Medium Slither findings to an LLM via OpenRouter and assembles
+Sends High/Medium/Low Slither findings to an LLM via OpenRouter and assembles
 a structured Markdown audit report.
 
 Environment
@@ -33,7 +33,7 @@ console = Console()
 
 _DEFAULT_MODEL  = "anthropic/claude-3.5-sonnet"
 _OPENROUTER_URL = "https://openrouter.ai/api/v1"
-_IMPACT_FILTER  = {"High", "Medium"}
+_IMPACT_FILTER  = {"High", "Medium", "Low"}
 _CONTEXT_LINES  = 5
 
 _SYSTEM_PROMPT = (
@@ -76,7 +76,7 @@ class AIEngine:
 
     def analyze_vulnerabilities(self, detectors: list, project_root: str) -> str:
         """
-        Filter ``detectors`` to High/Medium findings, call the LLM for each,
+        Filter ``detectors`` to High/Medium/Low findings, call the LLM for each,
         and return one consolidated Markdown report string.
 
         Parameters
@@ -92,8 +92,8 @@ class AIEngine:
 
         if not targets:
             return (
-                "## No High or Medium severity vulnerabilities found to analyze.\n\n"
-                "Only lower-severity findings were detected by Slither. "
+                "## No High, Medium, or Low severity vulnerabilities found to analyze.\n\n"
+                "Only Informational or lower-severity findings were detected by Slither. "
                 "Re-run with a broader filter if needed."
             )
 
@@ -116,7 +116,13 @@ class AIEngine:
                 rule   = detector.get("check", "unknown-rule")
                 impact = detector.get("impact", "Unknown")
 
-                color = "bold red" if impact == "High" else "bold yellow"
+                if impact == "High":
+                    color = "bold red"
+                elif impact == "Medium":
+                    color = "bold yellow"
+                else:
+                    color = "bold blue"
+                
                 progress.update(
                     task_id,
                     description=(
@@ -268,7 +274,7 @@ def _build_report_header(project_root: str, vuln_count: int, model: str) -> str:
         "|---|---|\n"
         f"| **Project** | `{project_root}` |\n"
         f"| **Generated** | {now} |\n"
-        f"| **High/Medium Findings** | {vuln_count} |\n"
+        f"| **Analyzed Findings** | {vuln_count} |\n"
         f"| **Model** | `{model}` |\n\n"
         "---\n\n"
     )

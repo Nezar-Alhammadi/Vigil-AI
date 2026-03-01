@@ -32,6 +32,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
+from rich.markdown import Markdown
 
 from inputs import ChainLoader, GitHubLoader, LocalLoader, SUPPORTED_CHAINS
 
@@ -495,11 +496,19 @@ def _run_slither(target: str, full: bool) -> None:
                     report_md = engine.analyze_vulnerabilities(detectors, target)
                     
                     # Ensure we have a valid report string and it is not just the empty fallback
-                    if report_md and not report_md.startswith("## No High or Medium"):
+                    if report_md and not report_md.startswith("## No High, Medium, or Low"):
                         report_path = os.path.join(os.getcwd(), "Audit_Report.md")
                         with open(report_path, "w", encoding="utf-8") as f:
                             f.write(report_md)
-                        console.print(f"\n[bold green]Success![/bold green] Detailed AI report saved to: [cyan]{report_path}[/cyan]")
+                        
+                        console.print("\n")
+                        console.print(Panel("[bold green]AI Audit Report Generated Successfully![/bold green]", expand=False))
+                        console.print(Markdown(report_md))
+                        
+                        console.print(f"\n[bold green]Success![/bold green] Detailed AI report saved to: [cyan]{report_path}[/cyan]\n")
+                        
+                        if typer.confirm("Do you want to open the report in your code editor now?", default=True):
+                            typer.launch(report_path)
                     else:
                         console.print(f"\n[bold yellow]Note:[/bold yellow] {report_md}")
                 except Exception as e:
