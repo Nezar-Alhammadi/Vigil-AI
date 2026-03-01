@@ -164,7 +164,7 @@ def _run_local_scan(path: str, full: bool) -> None:
         contracts = loader.load()
 
     _print_contracts_table(contracts, source_label="Local Path")
-    _run_slither(path, full)
+    _run_static_analyzers(path, full)
 
 
 def _run_github_scan(url: str, full: bool) -> None:
@@ -186,7 +186,7 @@ def _run_github_scan(url: str, full: bool) -> None:
     else:
         _print_contracts_table(contracts, source_label="GitHub Repository")
         if repo_path:
-            _run_slither(repo_path, full)
+            _run_static_analyzers(repo_path, full)
     finally:
         loader.cleanup()
 
@@ -223,7 +223,7 @@ def _run_chain_scan(address: str, chain: str, api_key: str, full: bool) -> None:
         raise typer.Exit(code=1)
 
     _print_contracts_table(contracts, source_label=f"On-Chain ({chain.capitalize()})")
-    _run_slither_for_chain_contracts(contracts, full)
+    _run_static_analyzers_for_chain_contracts(contracts, full)
 
 
 def _print_contracts_table(contracts: list, source_label: str) -> None:
@@ -433,22 +433,19 @@ def prompt_for_model() -> str:
     return options[choice]
 
 
-def _run_slither(target: str, full: bool) -> None:
+def _run_slither(target: str, full: bool) -> list:
     slither_bin = shutil.which("slither")
     if not slither_bin:
         err_console.print(
             "[bold yellow]Warning:[/bold yellow] Slither is not installed or not in PATH.\n"
             "Install with: [cyan]pip install slither-analyzer[/cyan]"
         )
-        return
+        return []
 
-    # إنشاء مجلد مؤقت بدلاً من ملف، لكي ينشئ Slither الملف براحته دون مشاكل "exists already"
     with tempfile.TemporaryDirectory(prefix="vigil_slither_") as tmp_dir:
         tmp_json_path = os.path.join(tmp_dir, "report.json")
-        
         cmd = [slither_bin, target, "--json", tmp_json_path]
         
-        # الفلترة لتجاهل المكتبات
         if not full:
             filter_regex = "(lib/|node_modules/|test/|tests/|script/|scripts/|mock/|mocks/|@openzeppelin/)"
             cmd.extend(["--filter-paths", filter_regex])
@@ -469,12 +466,11 @@ def _run_slither(target: str, full: bool) -> None:
                 )
             except subprocess.TimeoutExpired:
                 err_console.print("[bold red]Error:[/bold red] Slither timed out.")
-                return
+                return []
             except Exception as exc:
                 err_console.print(f"[bold red]Error:[/bold red] Failed to run Slither: {exc}")
-                return
+                return []
 
-        # محاولة استخراج النتائج من ملف JSON
         parsed_successfully = False
         detectors = []
         
@@ -484,11 +480,12 @@ def _run_slither(target: str, full: bool) -> None:
                     data = json.load(f)
                     if "results" in data and "detectors" in data["results"]:
                         detectors = data["results"]["detectors"]
+                        for d in detectors:
+                            d["source_tool"] = "Slither"
                         parsed_successfully = True
             except Exception:
                 pass
 
-        # في حال فشل الفحص تماماً ولم يتم إنشاء JSON (أو فشل قراءته)
         if not parsed_successfully and result.returncode != 0:
             output_text = result.stdout.strip()
             if _looks_like_missing_foundry_deps(output_text):
@@ -504,62 +501,139 @@ def _run_slither(target: str, full: bool) -> None:
                     border_style="red"
                 )
                 console.print(slither_error)
-            return
+            return []
 
-        # طباعة الجدول المنظم إذا تم استخراج الثغرات بنجاح
-        if not detectors:
-            console.print("\n[bold green]Slither finished successfully with no issues found.[/bold green] ✅")
-        else:
-            _print_slither_table(detectors)
-            
-            if typer.confirm("\nDo you want to generate a detailed AI Audit Report using OpenRouter?"):
-                try:
-                    from ai_engine.analyzer import AIEngine
-                    
-                    config_dir = Path.home() / ".vigil-ai"
-                    key_file = config_dir / "openrouter_key"
-                    
-                    if not os.environ.get("OPENROUTER_API_KEY"):
-                        if key_file.exists():
-                            api_key = key_file.read_text(encoding="utf-8").strip()
-                            os.environ["OPENROUTER_API_KEY"] = api_key
-                        else:
-                            api_key = typer.prompt("🔑 Please enter your OpenRouter API Key (Will be saved securely for future uses)", hide_input=True).strip()
-                            config_dir.mkdir(parents=True, exist_ok=True)
-                            key_file.write_text(api_key, encoding="utf-8")
-                            os.environ["OPENROUTER_API_KEY"] = api_key
+        return detectors
 
-                    selected_model = prompt_for_model()
-                    engine = AIEngine(model=selected_model)
-                    
-                    with console.status(f"[bold green]Initializing AI Engine & Extracting Code Context using {selected_model}..."):
-                        # Just a short delay status for UX, handled mostly inside AIEngine
-                        pass
-                        
-                    report_md = engine.analyze_vulnerabilities(detectors, target)
-                    
-                    # Ensure we have a valid report string and it is not just the empty fallback
-                    if report_md and not report_md.startswith("## No High, Medium, or Low"):
-                        report_path = os.path.join(os.getcwd(), "Audit_Report.md")
-                        with open(report_path, "w", encoding="utf-8") as f:
-                            f.write(report_md)
-                        
-                        console.print("\n")
-                        console.print(Panel("[bold green]AI Audit Report Generated Successfully![/bold green]", expand=False))
-                        console.print(Markdown(report_md))
-                        
-                        console.print(f"\n[bold green]Success![/bold green] Detailed AI report saved to: [cyan]{report_path}[/cyan]\n")
-                        
-                        if typer.confirm("Do you want to open the report in your code editor now?", default=True):
-                            typer.launch(report_path)
+
+def _run_aderyn(target: str) -> list:
+    aderyn_bin = shutil.which("aderyn")
+    if not aderyn_bin:
+        err_console.print(
+            "[bold yellow]Warning:[/bold yellow] Aderyn is not installed. Skipping Aderyn scan.\n"
+            "(Install with: [cyan]curl -L https://raw.githubusercontent.com/Cyfrin/aderyn/main/cyfrinup/install | bash[/cyan])"
+        )
+        return []
+
+    with tempfile.TemporaryDirectory(prefix="vigil_aderyn_") as tmp_dir:
+        tmp_json_path = os.path.join(tmp_dir, "report.json")
+        cmd = [aderyn_bin, target, "-o", tmp_json_path]
+
+        with console.status(f"[bold magenta]Running Aderyn analysis on [white]{target}[/white]..."):
+            try:
+                result = subprocess.run(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    timeout=600,
+                )
+            except subprocess.TimeoutExpired:
+                err_console.print("[bold red]Error:[/bold red] Aderyn timed out.")
+                return []
+            except Exception as exc:
+                err_console.print(f"[bold red]Error:[/bold red] Failed to run Aderyn: {exc}")
+                return []
+
+        detectors = []
+        if os.path.exists(tmp_json_path) and os.path.getsize(tmp_json_path) > 0:
+            try:
+                with open(tmp_json_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                
+                # Normalize Aderyn data to match Slither format
+                severity_map = {
+                    "critical_issues": "High",
+                    "high_issues": "High",
+                    "medium_issues": "Medium",
+                    "low_issues": "Low",
+                    "nc_issues": "Informational"
+                }
+
+                for issue_type, mapped_severity in severity_map.items():
+                    issues = data.get(issue_type, [])
+                    for issue in issues:
+                        for instance in issue.get("instances", []):
+                            detector = {
+                                "check": issue.get("title", "Unknown"),
+                                "impact": mapped_severity,
+                                "description": issue.get("description", "").strip(),
+                                "elements": [
+                                    {
+                                        "source_mapping": {
+                                            "filename_absolute": instance.get("contract_path", ""),
+                                            "lines": [instance.get("line_no", 0)]
+                                        }
+                                    }
+                                ],
+                                "source_tool": "Aderyn"
+                            }
+                            detectors.append(detector)
+            except Exception:
+                pass
+        
+        return detectors
+
+
+def _run_static_analyzers(target: str, full: bool) -> None:
+    all_detectors = []
+    
+    slither_detectors = _run_slither(target, full)
+    all_detectors.extend(slither_detectors)
+
+    aderyn_detectors = _run_aderyn(target)
+    all_detectors.extend(aderyn_detectors)
+
+    if not all_detectors:
+        console.print("\n[bold green]Static analysis finished successfully with no issues found.[/bold green] ✅")
+    else:
+        _print_vulnerability_table(all_detectors)
+        
+        if typer.confirm("\nDo you want to generate a detailed AI Audit Report using OpenRouter?"):
+            try:
+                from ai_engine.analyzer import AIEngine
+                
+                config_dir = Path.home() / ".vigil-ai"
+                key_file = config_dir / "openrouter_key"
+                
+                if not os.environ.get("OPENROUTER_API_KEY"):
+                    if key_file.exists():
+                        api_key = key_file.read_text(encoding="utf-8").strip()
+                        os.environ["OPENROUTER_API_KEY"] = api_key
                     else:
-                        console.print(f"\n[bold yellow]Note:[/bold yellow] {report_md}")
-                except Exception as e:
-                    err_console.print(f"\n[bold red]AI Engine Error:[/bold red] {e}")
+                        api_key = typer.prompt("🔑 Please enter your OpenRouter API Key (Will be saved securely for future uses)", hide_input=True).strip()
+                        config_dir.mkdir(parents=True, exist_ok=True)
+                        key_file.write_text(api_key, encoding="utf-8")
+                        os.environ["OPENROUTER_API_KEY"] = api_key
+
+                selected_model = prompt_for_model()
+                engine = AIEngine(model=selected_model)
+                
+                with console.status(f"[bold green]Initializing AI Engine & Extracting Code Context using {selected_model}..."):
+                    pass
+                    
+                report_md = engine.analyze_vulnerabilities(all_detectors, target)
+                
+                if report_md and not report_md.startswith("## No High, Medium, or Low"):
+                    report_path = os.path.join(os.getcwd(), "Audit_Report.md")
+                    with open(report_path, "w", encoding="utf-8") as f:
+                        f.write(report_md)
+                    
+                    console.print("\n")
+                    console.print(Panel("[bold green]AI Audit Report Generated Successfully![/bold green]", expand=False))
+                    console.print(Markdown(report_md))
+                    
+                    console.print(f"\n[bold green]Success![/bold green] Detailed AI report saved to: [cyan]{report_path}[/cyan]\n")
+                    
+                    if typer.confirm("Do you want to open the report in your code editor now?", default=True):
+                        typer.launch(report_path)
+                else:
+                    console.print(f"\n[bold yellow]Note:[/bold yellow] {report_md}")
+            except Exception as e:
+                err_console.print(f"\n[bold red]AI Engine Error:[/bold red] {e}")
 
 
-def _print_slither_table(detectors: list) -> None:
-    # ترتيب مستويات الخطورة من الأعلى إلى الأقل
+def _print_vulnerability_table(detectors: list) -> None:
     impact_weights = {
         "High": 1,
         "Medium": 2,
@@ -568,26 +642,26 @@ def _print_slither_table(detectors: list) -> None:
         "Optimization": 5
     }
     
-    # فرز القائمة بناءً على مستوى الخطورة
     detectors.sort(key=lambda x: impact_weights.get(x.get("impact", "Informational"), 99))
 
     table = Table(
-        title="\n[bold orange3]Slither Vulnerability Report[/bold orange3]",
+        title="\n[bold orange3]Security Vulnerability Report[/bold orange3]",
         box=box.HEAVY_EDGE,
         show_lines=True,
         header_style="bold cyan"
     )
     
+    table.add_column("Tool", justify="center", width=10)
     table.add_column("Severity", justify="center", width=12)
     table.add_column("Detector (Rule)", style="bold white", width=25)
     table.add_column("Description / Location", style="dim")
 
     for d in detectors:
+        tool = d.get("source_tool", "Unknown")
         impact = d.get("impact", "Informational")
         check = d.get("check", "Unknown")
         description = d.get("description", "").strip()
 
-        # تنسيق الألوان بناءً على الخطورة
         if impact == "High":
             impact_str = "[bold red]High[/bold red]"
         elif impact == "Medium":
@@ -598,18 +672,24 @@ def _print_slither_table(detectors: list) -> None:
             impact_str = "[bold blue]Optimization[/bold blue]"
         else:
             impact_str = f"[bold cyan]{impact}[/bold cyan]"
+            
+        if tool == "Slither":
+            tool_str = "[bold blue]Slither[/bold blue]"
+        elif tool == "Aderyn":
+            tool_str = "[bold magenta]Aderyn[/bold magenta]"
+        else:
+            tool_str = f"[white]{tool}[/white]"
 
-        # تنظيف الوصف واقتصاص السطر الأول فقط ليكون الجدول أنيقاً
         clean_desc = " ".join(description.split())
         short_desc = description.split('\n')[0] if '\n' in description else clean_desc
 
-        table.add_row(impact_str, check, short_desc)
+        table.add_row(tool_str, impact_str, check, short_desc)
 
     console.print(table)
     console.print(f"\n[bold orange3]Total issues found: {len(detectors)}[/bold orange3]")
 
 
-def _run_slither_for_chain_contracts(contracts: list, full: bool) -> None:
+def _run_static_analyzers_for_chain_contracts(contracts: list, full: bool) -> None:
     with tempfile.TemporaryDirectory(prefix="vigil_chain_") as tmp_dir:
         root = Path(tmp_dir)
         for contract in contracts:
@@ -618,7 +698,7 @@ def _run_slither_for_chain_contracts(contracts: list, full: bool) -> None:
             file_path.parent.mkdir(parents=True, exist_ok=True)
             file_path.write_text(contract.content, encoding="utf-8")
 
-        _run_slither(str(root), full)
+        _run_static_analyzers(str(root), full)
 
 
 def _normalize_contract_rel_path(path: str, fallback_name: str) -> Path:
