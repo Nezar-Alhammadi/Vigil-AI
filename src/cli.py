@@ -177,8 +177,8 @@ def _run_github_scan(url: str, full: bool) -> None:
         raise typer.Exit(code=1)
 
     try:
-        with console.status("[bold green]Cloning repository & installing dependencies..."):
-            contracts = loader.load()
+        with console.status("[bold green]Starting GitHub clone process...") as status:
+            contracts = loader.load(status=status)
             repo_path = loader.repo_path
     except RuntimeError as exc:
         err_console.print(f"[bold red]Error:[/bold red] {exc}")

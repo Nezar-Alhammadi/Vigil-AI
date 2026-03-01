@@ -41,11 +41,13 @@ class GitHubLoader:
             )
         return True, ""
 
-    def load(self) -> List[ContractFile]:
+    def load(self, status=None) -> List[ContractFile]:
         self._temp_dir = tempfile.mkdtemp(prefix="vigil_github_")
         try:
+            if status:
+                status.update("[bold cyan]Cloning repository (this may take a few minutes)...[/bold cyan]")
             self._clone()
-            self._install_dependencies()
+            self._install_dependencies(status=status)
 
             loader = LocalLoader(self._temp_dir)
             contracts = loader.load()
@@ -57,6 +59,13 @@ class GitHubLoader:
                 c.path = str(Path(c.path).relative_to(resolved_temp))
             
             return contracts
+        except subprocess.TimeoutExpired as e:
+            self.cleanup()
+            command = " ".join(e.cmd) if isinstance(e.cmd, list) else e.cmd
+            raise RuntimeError(
+                f"Timeout exceeded while loading the repository. The process took too long to complete.\n"
+                f"Command: {command}"
+            ) from e
         except Exception:
             self.cleanup()
             raise
@@ -81,14 +90,14 @@ class GitHubLoader:
             ],
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=300,
         )
         if result.returncode != 0:
             raise RuntimeError(
                 f"git clone failed for '{self._clone_url}':\n{result.stderr.strip()}"
             )
 
-    def _install_dependencies(self) -> None:
+    def _install_dependencies(self, status=None) -> None:
         """محاولة تهيئة المشروع بالكامل وتثبيت جميع المكتبات قبل الفحص."""
         if not self._temp_dir:
             return
@@ -109,23 +118,29 @@ class GitHubLoader:
             subprocess.run(["git", "submodule", "sync"], cwd=self._temp_dir, capture_output=True)
 
         # 1. تهيئة وتحديث الـ Submodules الخاصة بـ Git
+        if status:
+            status.update("[bold cyan]Updating Git submodules...[/bold cyan]")
         subprocess.run(
             ["git", "submodule", "update", "--init", "--recursive"],
             cwd=self._temp_dir,
             capture_output=True,
-            timeout=60
+            timeout=300
         )
 
         # 2. تشغيل Makefile إذا وجد
         if (root / "Makefile").exists():
-            subprocess.run(["make"], cwd=self._temp_dir, capture_output=True, timeout=120)
+            if status:
+                status.update("[bold cyan]Running Makefile...[/bold cyan]")
+            subprocess.run(["make"], cwd=self._temp_dir, capture_output=True, timeout=300)
 
         # 3. تثبيت مكتبات Node.js إذا لزم الأمر
         if (root / "package.json").exists():
+            if status:
+                status.update("[bold cyan]Installing Node.js dependencies (NPM/Yarn)...[/bold cyan]")
             if shutil.which("yarn"):
-                subprocess.run(["yarn", "install"], cwd=self._temp_dir, capture_output=True, timeout=120)
+                subprocess.run(["yarn", "install"], cwd=self._temp_dir, capture_output=True, timeout=600)
             elif shutil.which("npm"):
-                subprocess.run(["npm", "install", "--legacy-peer-deps"], cwd=self._temp_dir, capture_output=True, timeout=120)
+                subprocess.run(["npm", "install", "--legacy-peer-deps"], cwd=self._temp_dir, capture_output=True, timeout=600)
 
         # 4. المُحلل الذكي للاعتماديات (Smart Dependency Resolver) - واعي بالإصدارات!
         needed_libs = set()
@@ -178,30 +193,37 @@ class GitHubLoader:
                     if target_path.exists():
                         shutil.rmtree(target_path, ignore_errors=True)
                     
+                    if status:
+                        status.update("[bold cyan]Resolving & downloading missing Solidity libraries...[/bold cyan]")
+                    
                     subprocess.run(
                         ["git", "clone", "--depth", "1", "--branch", branch, repo_url, str(target_path)], 
                         capture_output=True, 
-                        timeout=120
+                        timeout=300
                     )
 
         # 5. تهيئة وبناء Foundry
         if (root / "foundry.toml").exists():
             forge_bin = shutil.which("forge")
             if forge_bin:
+                if status:
+                    status.update("[bold cyan]Building project with Foundry...[/bold cyan]")
                 subprocess.run(
                     [forge_bin, "build"], 
                     cwd=self._temp_dir, 
                     capture_output=True, 
-                    timeout=120
+                    timeout=300
                 )
 
         # 6. تهيئة مشاريع Hardhat (إن وجدت)
         if (root / "hardhat.config.js").exists() or (root / "hardhat.config.ts").exists():
             npx_bin = shutil.which("npx")
             if npx_bin:
+                if status:
+                    status.update("[bold cyan]Compiling Hardhat project...[/bold cyan]")
                 subprocess.run(
                     [npx_bin, "hardhat", "compile"], 
                     cwd=self._temp_dir, 
                     capture_output=True, 
-                    timeout=120
+                    timeout=300
                 )
