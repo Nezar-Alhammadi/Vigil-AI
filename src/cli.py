@@ -35,6 +35,7 @@ from rich.text import Text
 from rich.markdown import Markdown
 from rich.prompt import Prompt
 
+from config_loader import load_config
 from inputs import ChainLoader, GitHubLoader, LocalLoader, SUPPORTED_CHAINS
 
 app = typer.Typer(
@@ -194,6 +195,10 @@ def _run_github_scan(url: str, full: bool) -> None:
 def _run_chain_scan(address: str, chain: str, api_key: str, full: bool) -> None:
     cfg = SUPPORTED_CHAINS.get(chain.lower(), {})
     explorer = cfg.get("explorer_name", chain)
+
+    config = load_config()
+    if not api_key:
+        api_key = config.get("explorer_api_keys", {}).get(chain, "")
 
     info = (
         f"[bold cyan]Input:[/bold cyan]  On-Chain Address\n"
@@ -407,6 +412,9 @@ def _run_shell_scan(session: ShellSession) -> None:
 
 
 def prompt_for_model() -> str:
+    config = load_config()
+    default_model = config.get("llm", {}).get("model", "anthropic/claude-3.5-sonnet")
+    
     console.print("\n[bold cyan]Select an AI Model for the Audit Report:[/bold cyan]")
     options = {
         "1": "anthropic/claude-3.5-sonnet",
@@ -415,16 +423,25 @@ def prompt_for_model() -> str:
         "4": "meta-llama/llama-3-70b-instruct",
         "5": "Custom"
     }
-    console.print("  [1] anthropic/claude-3.5-sonnet (Recommended)")
-    console.print("  [2] openai/gpt-4o")
-    console.print("  [3] google/gemini-1.5-pro")
-    console.print("  [4] meta-llama/llama-3-70b-instruct")
-    console.print("  [5] Custom (Type any OpenRouter model name)")
+    
+    # Determine which is the default for display
+    def_idx = "1"
+    for k, v in options.items():
+        if v == default_model:
+            def_idx = k
+            break
+            
+    for k, v in options.items():
+        if k == "5":
+            console.print(f"  [{k}] {v} (Type any OpenRouter model name)")
+        else:
+            is_def = " (Config Default)" if k == def_idx else (" (Recommended)" if k == "1" and def_idx != "1" else "")
+            console.print(f"  [{k}] {v}{'[bold green]' + is_def + '[/bold green]' if is_def else ''}")
     
     choice = Prompt.ask(
         "\nEnter your choice",
         choices=["1", "2", "3", "4", "5"],
-        default="1"
+        default=def_idx
     )
     
     if choice == "5":
@@ -606,15 +623,18 @@ def _run_static_analyzers(target: str, full: bool) -> None:
                         key_file.write_text(api_key, encoding="utf-8")
                         os.environ["OPENROUTER_API_KEY"] = api_key
 
+                config = load_config()
+                min_severity = config.get("audit", {}).get("severity_level", "medium")
+                
                 selected_model = prompt_for_model()
-                engine = AIEngine(model=selected_model)
+                engine = AIEngine(model=selected_model, min_severity=min_severity)
                 
                 with console.status(f"[bold green]Initializing AI Engine & Extracting Code Context using {selected_model}..."):
                     pass
                     
                 report_md = engine.analyze_vulnerabilities(all_detectors, target)
                 
-                if report_md and not report_md.startswith("## No High, Medium, or Low"):
+                if report_md and not report_md.startswith("## No vulnerabilities found"):
                     report_path = os.path.join(os.getcwd(), "Audit_Report.md")
                     with open(report_path, "w", encoding="utf-8") as f:
                         f.write(report_md)

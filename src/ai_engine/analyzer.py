@@ -61,6 +61,7 @@ class AIEngine:
         self,
         model: str = _DEFAULT_MODEL,
         api_key: Optional[str] = None,
+        min_severity: str = "medium"
     ) -> None:
         resolved_key = api_key or os.environ.get("OPENROUTER_API_KEY", "")
         if not resolved_key:
@@ -70,6 +71,7 @@ class AIEngine:
             )
 
         self._model  = model
+        self._min_severity = min_severity.lower()
         self._client = OpenAI(api_key=resolved_key, base_url=_OPENROUTER_URL)
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -88,12 +90,20 @@ class AIEngine:
         -------
         A Markdown string ready to be written to ``Audit_Report.md``.
         """
-        targets = [d for d in detectors if d.get("impact") in _IMPACT_FILTER]
+        impact_filter = set()
+        if self._min_severity == "high":
+            impact_filter = {"High"}
+        elif self._min_severity == "medium":
+            impact_filter = {"High", "Medium"}
+        else: # low
+            impact_filter = {"High", "Medium", "Low"}
+
+        targets = [d for d in detectors if d.get("impact") in impact_filter]
 
         if not targets:
             return (
-                "## No High, Medium, or Low severity vulnerabilities found to analyze.\n\n"
-                "Only Informational or lower-severity findings were detected by Slither. "
+                f"## No vulnerabilities found matching severity level: {self._min_severity.capitalize()}.\n\n"
+                "Only Informational or lower-severity findings were detected by Slither/Aderyn. "
                 "Re-run with a broader filter if needed."
             )
 
