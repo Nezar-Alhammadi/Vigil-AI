@@ -663,7 +663,32 @@ def _run_static_analyzers(target: str, full: bool, pdf: bool) -> None:
                             console.print(f"[bold yellow]Warning:[/bold yellow] Failed to generate PDF: {e}\n")
                     
                     if typer.confirm("Do you want to open the report in your code editor now?", default=True):
-                            typer.launch(report_path)
+                        typer.launch(report_path)
+                        
+                    if typer.confirm("\n✨ Do you want Vigil-AI to attempt auto-fixing these vulnerabilities in your local files?"):
+                        with console.status("[bold cyan]Analyzing diffs and applying patches...[/bold cyan]"):
+                            try:
+                                from ai_engine.patcher import apply_fixes
+                                patch_results = apply_fixes(report_md, target)
+                                
+                                console.print("\n[bold cyan]Auto-Fix Summary:[/bold cyan]")
+                                successful = patch_results.get("successful", [])
+                                failed = patch_results.get("failed", [])
+                                
+                                if successful:
+                                    console.print("[bold green]✅ Successfully patched:[/bold green]")
+                                    for p in successful:
+                                        console.print(f"  - {p}")
+                                        
+                                if failed:
+                                    console.print("[bold red]❌ Failed to patch:[/bold red]")
+                                    for p, reason in failed:
+                                        console.print(f"  - {p} (Reason: {reason})")
+                                        
+                                if not successful and not failed:
+                                    console.print("[yellow]No valid diffs found to apply. Make sure the AI output matched the format.[/yellow]")
+                            except Exception as pe:
+                                err_console.print(f"\n[bold red]Auto-Fix Error:[/bold red] {pe}")
                 else:
                     console.print(f"\n[bold yellow]Note:[/bold yellow] {report_md}")
             except Exception as e:
