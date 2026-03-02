@@ -87,6 +87,15 @@ class GitHubLoader:
             raise RuntimeError(
                 f"git clone failed for '{self._clone_url}':\n{result.stderr.strip()}"
             )
+            
+        # Ensure submodules are explicitly initialized and updated immediately after cloning
+        subprocess.run(
+            ["git", "submodule", "update", "--init", "--recursive"],
+            cwd=self._temp_dir,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
 
     def _install_dependencies(self) -> None:
         """محاولة تهيئة المشروع بالكامل وتثبيت جميع المكتبات قبل الفحص."""
