@@ -18,13 +18,12 @@ class DynamicVerifier:
             raise FileNotFoundError("Foundry tool 'forge' is not installed or not in PATH.")
 
     def _setup_isolated_env(
-        self, target_contracts: Dict[str, str], poc_content: str
+        self, target_contracts: Dict[str, str], poc_content: str, project_root: str
     ) -> Tuple[bool, str]:
         """
-        1. Create temp dir
-        2. forge init --force --no-git
-        3. Write vulnerable contracts to src/
-        4. Write exploit test to test/
+        1. Copy entire project_root to temp dir
+        2. If no foundry.toml, run forge init --no-git --force
+        3. Write exploit test to test/
 
         Returns:
             (success, output) — output is always the raw stdout+stderr from forge init.
@@ -33,48 +32,59 @@ class DynamicVerifier:
         self._temp_dir = tempfile.mkdtemp(prefix="vigil_verify_")
         output = ""
 
-        # Initialize Forge project
-        init_cmd = [self._forge_bin, "init", "--force", "--no-git"]
+        # Copy entire workspace to preserve dependencies
         try:
-            result = subprocess.run(
-                init_cmd,
-                cwd=self._temp_dir,
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-            output = result.stdout + "\n" + result.stderr
-            if result.returncode != 0:
-                return False, f"[forge init failed]\n{output}"
-        except subprocess.TimeoutExpired as e:
-            out = (e.stdout or "").strip()
-            err = (e.stderr or "").strip()
-            return False, f"[forge init timed out]\n{out}\n{err}".strip()
+            shutil.rmtree(self._temp_dir) # Remove empty dir to use copytree
+            shutil.copytree(project_root, self._temp_dir)
         except Exception as e:
-            return False, f"[forge init error] {e}\n{output}".strip()
+            return False, f"[workspace copy error] {e}\n"
 
-        # Remove default boilerplate contracts
-        forge_src = Path(self._temp_dir) / "src"
-        forge_test = Path(self._temp_dir) / "test"
+        forge_toml = Path(self._temp_dir) / "foundry.toml"
+        if not forge_toml.exists():
+            # Initialize Forge project if it's not redoundry
+            init_cmd = [self._forge_bin, "init", "--force", "--no-git"]
+            try:
+                result = subprocess.run(
+                    init_cmd,
+                    cwd=self._temp_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+                output = result.stdout + "\n" + result.stderr
+                if result.returncode != 0:
+                    return False, f"[forge init failed]\n{output}"
+            except subprocess.TimeoutExpired as e:
+                out = (e.stdout or "").strip()
+                err = (e.stderr or "").strip()
+                return False, f"[forge init timed out]\n{out}\n{err}".strip()
+            except Exception as e:
+                return False, f"[forge init error] {e}\n{output}".strip()
+                
+            # Remove default boilerplate contracts
+            forge_src = Path(self._temp_dir) / "src"
+            forge_test = Path(self._temp_dir) / "test"
 
-        for f in forge_src.glob("*.sol"):
-            f.unlink()
-        for f in forge_test.glob("*.sol"):
-            f.unlink()
+            for f in forge_src.glob("*.sol"):
+                f.unlink()
+            for f in forge_test.glob("*.sol"):
+                f.unlink()
 
-        # Write target contracts into src/
-        for file_name, content in target_contracts.items():
-            dest = forge_src / file_name
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(content, encoding="utf-8")
+            # Write target contracts into src/
+            for file_name, content in target_contracts.items():
+                dest = forge_src / file_name
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text(content, encoding="utf-8")
 
         # Write the LLM-generated exploit into test/
+        forge_test = Path(self._temp_dir) / "test"
+        forge_test.mkdir(exist_ok=True)
         poc_dest = forge_test / "Exploit.t.sol"
         poc_dest.write_text(poc_content, encoding="utf-8")
 
         return True, output
 
-    def verify(self, target_contracts: Dict[str, str], poc_content: str) -> Tuple[bool, str]:
+    def verify(self, target_contracts: Dict[str, str], poc_content: str, project_root: str) -> Tuple[bool, str]:
         """
         Runs the generated PoC in an isolated Foundry environment.
 
@@ -87,7 +97,7 @@ class DynamicVerifier:
         output = ""
         try:
             # --- Phase 1: environment setup ---
-            init_ok, init_output = self._setup_isolated_env(target_contracts, poc_content)
+            init_ok, init_output = self._setup_isolated_env(target_contracts, poc_content, project_root)
             output = init_output
 
             if not init_ok:

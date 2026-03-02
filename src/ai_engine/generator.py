@@ -105,6 +105,8 @@ Your task is to write a standalone Foundry test (`Exploit.t.sol`) that successfu
 If the vulnerability is real, your Foundry test MUST FAIL or REVERT during the exploit execution, or it should include assertions that prove the exploit was successful (which we will interpret as a successful verification). 
 Actually, standard convention: The test should contain a `testExploit()` function. If the vulnerability is real, the exploit should succeed, and `testExploit()` should PASS. If the vulnerability doesn't exist (false positive), `testExploit()` should FAIL/REVERT.
 
+CRITICAL: You MUST use the EXACT SAME `pragma solidity` version as the provided target smart contract. Do not default to ^0.8.x if the contract is older. If the contract is <0.8.0, remember to import SafeMath if needed, but your primary goal is to make the test compile alongside the target.
+
 ### Target Smart Contract Source Code:
 ```solidity
 {contract_content}

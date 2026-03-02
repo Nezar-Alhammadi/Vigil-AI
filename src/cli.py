@@ -651,7 +651,7 @@ def _verify_findings(detectors: list, contracts: list, contract_root_dir: str, d
         verify_log = ""
         try:
             with console.status("[dim]Executing PoC in isolated Foundry environment...[/dim]"):
-                is_real, verify_log = verifier.verify(contracts_dict, poc_code)
+                is_real, verify_log = verifier.verify(contracts_dict, poc_code, project_root=contract_root_dir)
         except Exception as e:
             err_console.print(f"[bold red]Error during PoC execution/verification:[/bold red] {e}")
             continue
