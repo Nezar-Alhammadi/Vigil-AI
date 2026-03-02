@@ -22,7 +22,7 @@ class DynamicVerifier:
     ) -> Tuple[bool, str]:
         """
         1. Create temp dir
-        2. forge init --force --no-commit
+        2. forge init --force --no-git
         3. Write vulnerable contracts to src/
         4. Write exploit test to test/
 
@@ -34,7 +34,7 @@ class DynamicVerifier:
         output = ""
 
         # Initialize Forge project
-        init_cmd = [self._forge_bin, "init", "--force", "--no-commit"]
+        init_cmd = [self._forge_bin, "init", "--force", "--no-git"]
         try:
             result = subprocess.run(
                 init_cmd,
