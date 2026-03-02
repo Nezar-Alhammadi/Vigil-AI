@@ -34,6 +34,8 @@ from rich.table import Table
 from rich.text import Text
 
 from inputs import ChainLoader, GitHubLoader, LocalLoader, SUPPORTED_CHAINS
+from ai_engine.generator import PoCGenerator
+from auditor.verifier import DynamicVerifier
 
 app = typer.Typer(
     name="vigil-ai",
@@ -162,7 +164,9 @@ def _run_local_scan(path: str, full: bool) -> None:
         contracts = loader.load()
 
     _print_contracts_table(contracts, source_label="Local Path")
-    _run_slither(path, full)
+    detectors = _run_slither(path, full)
+    if detectors:
+        _verify_findings(detectors, contracts, path)
 
 
 def _run_github_scan(url: str, full: bool) -> None:
@@ -184,7 +188,9 @@ def _run_github_scan(url: str, full: bool) -> None:
     else:
         _print_contracts_table(contracts, source_label="GitHub Repository")
         if repo_path:
-            _run_slither(repo_path, full)
+            detectors = _run_slither(repo_path, full)
+            if detectors:
+                _verify_findings(detectors, contracts, repo_path)
     finally:
         loader.cleanup()
 
@@ -221,7 +227,9 @@ def _run_chain_scan(address: str, chain: str, api_key: str, full: bool) -> None:
         raise typer.Exit(code=1)
 
     _print_contracts_table(contracts, source_label=f"On-Chain ({chain.capitalize()})")
-    _run_slither_for_chain_contracts(contracts, full)
+    detectors, tmp_dir = _run_slither_for_chain_contracts(contracts, full)
+    if detectors and tmp_dir:
+        _verify_findings(detectors, contracts, tmp_dir)
 
 
 def _print_contracts_table(contracts: list, source_label: str) -> None:
@@ -404,14 +412,14 @@ def _run_shell_scan(session: ShellSession) -> None:
         return
 
 
-def _run_slither(target: str, full: bool) -> None:
+def _run_slither(target: str, full: bool) -> list:
     slither_bin = shutil.which("slither")
     if not slither_bin:
         err_console.print(
             "[bold yellow]Warning:[/bold yellow] Slither is not installed or not in PATH.\n"
             "Install with: [cyan]pip install slither-analyzer[/cyan]"
         )
-        return
+        return []
 
     # إنشاء مجلد مؤقت بدلاً من ملف، لكي ينشئ Slither الملف براحته دون مشاكل "exists already"
     with tempfile.TemporaryDirectory(prefix="vigil_slither_") as tmp_dir:
@@ -440,10 +448,10 @@ def _run_slither(target: str, full: bool) -> None:
                 )
             except subprocess.TimeoutExpired:
                 err_console.print("[bold red]Error:[/bold red] Slither timed out.")
-                return
+                return []
             except Exception as exc:
                 err_console.print(f"[bold red]Error:[/bold red] Failed to run Slither: {exc}")
-                return
+                return []
 
         # محاولة استخراج النتائج من ملف JSON
         parsed_successfully = False
@@ -475,13 +483,15 @@ def _run_slither(target: str, full: bool) -> None:
                     border_style="red"
                 )
                 console.print(slither_error)
-            return
+            return []
 
         # طباعة الجدول المنظم إذا تم استخراج الثغرات بنجاح
         if not detectors:
             console.print("\n[bold green]Slither finished successfully with no issues found.[/bold green] ✅")
+            return []
         else:
             _print_slither_table(detectors)
+            return detectors
 
 
 def _print_slither_table(detectors: list) -> None:
@@ -535,16 +545,17 @@ def _print_slither_table(detectors: list) -> None:
     console.print(f"\n[bold orange3]Total issues found: {len(detectors)}[/bold orange3]")
 
 
-def _run_slither_for_chain_contracts(contracts: list, full: bool) -> None:
-    with tempfile.TemporaryDirectory(prefix="vigil_chain_") as tmp_dir:
-        root = Path(tmp_dir)
-        for contract in contracts:
-            rel_path = _normalize_contract_rel_path(contract.path, contract.name)
-            file_path = root / rel_path
-            file_path.parent.mkdir(parents=True, exist_ok=True)
-            file_path.write_text(contract.content, encoding="utf-8")
+def _run_slither_for_chain_contracts(contracts: list, full: bool) -> tuple[list, str]:
+    tmp_dir = tempfile.mkdtemp(prefix="vigil_chain_")
+    root = Path(tmp_dir)
+    for contract in contracts:
+        rel_path = _normalize_contract_rel_path(contract.path, contract.name)
+        file_path = root / rel_path
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(contract.content, encoding="utf-8")
 
-        _run_slither(str(root), full)
+    detectors = _run_slither(str(root), full)
+    return detectors, tmp_dir
 
 
 def _normalize_contract_rel_path(path: str, fallback_name: str) -> Path:
@@ -568,6 +579,78 @@ def _looks_like_missing_foundry_deps(stderr: str) -> bool:
         "InvalidCompilation",
     ]
     return any(marker in stderr for marker in markers)
+
+
+def _verify_findings(detectors: list, contracts: list, contract_root_dir: str) -> None:
+    # Filter only actionable findings
+    target_impacts = {"High", "Medium", "Low"}
+    actionable = [d for d in detectors if d.get("impact", "Informational") in target_impacts]
+    
+    if not actionable:
+        console.print("[dim]No High/Medium/Low vulnerabilities to verify dynamically.[/dim]")
+        return
+        
+    console.print(f"\n[bold magenta]Starting Dynamic Verification for {len(actionable)} findings...[/bold magenta]")
+    
+    ai_gen = PoCGenerator()
+    verifier = DynamicVerifier()
+    verified_true_positives = []
+    
+    # Load all contract contents into a dict for the verifier
+    contracts_dict = {c.name: c.content for c in contracts}
+    
+    # Ensure verified POCs dir exists
+    verified_dir = Path("verified_pocs")
+    verified_dir.mkdir(exist_ok=True)
+    
+    for idx, d in enumerate(actionable, start=1):
+        impact = d.get("impact", "Unknown")
+        check = d.get("check", "Unknown")
+        desc = d.get("description", "No description provided.")
+        
+        console.print(f"\n[cyan][{idx}/{len(actionable)}] Analyzing {impact} severity finding: {check}[/cyan]")
+        
+        # 1. Generate PoC
+        with console.status("[dim]Generating Foundry exploit with AI...[/dim]"):
+            # Combine all contract code to send to LLM (simplified approach)
+            main_code = "\n".join([f"// File: {name}\n{content}" for name, content in contracts_dict.items()])
+            
+            poc_code = ai_gen.generate_poc(
+                contract_name="Multiple Contracts",
+                contract_content=main_code[-8000:], # Basic length limit for LLM context
+                vulnerability_desc=desc
+            )
+            
+        if not poc_code:
+            console.print("[yellow]Failed to generate PoC. Skipping.[/yellow]")
+            continue
+            
+        # 2. Verify PoC
+        with console.status("[dim]Executing PoC in isolated Foundry environment...[/dim]"):
+            is_real, verify_log = verifier.verify(contracts_dict, poc_code)
+            
+        if is_real:
+            console.print(f"✅ [bold green]VERIFIED TRUE POSITIVE![/bold green] Exploit succeeded.")
+            verified_true_positives.append(d)
+            
+            # Save the successful PoC
+            poc_filename = verified_dir / f"{check}_exploit_{idx}.t.sol"
+            try:
+                poc_filename.write_text(poc_code, encoding="utf-8")
+                console.print(f"[dim]Saved exploit to {poc_filename}[/dim]")
+            except Exception:
+                pass
+        else:
+            console.print(f"❌ [yellow]VERIFIED FALSE POSITIVE[/yellow] (Exploit failed) or Unexploitable.")
+
+    # 3. Final Summary Table
+    if verified_true_positives:
+        console.print("\n[bold green]=== Dynamic Verification Complete ===" )
+        _print_slither_table(verified_true_positives)
+        console.print(f"[bold green]Saved successful exploits to ./verified_pocs/[/bold green]")
+    else:
+        console.print("\n[bold green]=== Dynamic Verification Complete ===")
+        console.print("[bold yellow]No findings could be verified as true positives. They may be false positives or too complex to exploit automatically.[/bold yellow]")
 
 
 if __name__ == "__main__":
