@@ -113,6 +113,16 @@ CRITICAL RULES FOR FOUNDRY TESTS:
    `address targetAddr = deployCode("FileName.sol:ContractName", abi.encode(constructorArg1));`
    `targetContract = ITargetContract(targetAddr);`
 5. If the target contract is `>= 0.8.0`, you may import and deploy it normally.
+
+CRITICAL RULES FOR PROVING THE EXPLOIT:
+1. You are FORBIDDEN from writing trivial tests using `assertTrue(true)` or just calling a function without asserting the impact.
+2. Your test MUST mathematically prove that the exploit was successful by comparing the state BEFORE and AFTER the attack.
+3. Depending on the vulnerability type, you MUST use strict Foundry assertions:
+   - For Fund Theft/Reentrancy: Record balances before, and use `assertGt(attacker.balance, initialBalance)` or `assertEq(targetContract.balance, 0)`.
+   - For Access Control/Privilege Escalation: Use `assertEq(targetContract.owner(), attackerAddress)`.
+   - For DoS/Griefing: Use `vm.expectRevert()` to prove a legitimate user can no longer use the function.
+   - For Logic Bugs/Bad PRNG: Assert that the attacker received the exact unintended benefit (e.g., `assertEq(contract.winner(), attacker)`).
+4. If your test does not include a mathematical proof of damage, you have failed.
 ### Target Smart Contract Source Code:
 ```solidity
 {contract_content}
