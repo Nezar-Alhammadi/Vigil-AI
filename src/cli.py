@@ -622,16 +622,17 @@ def _verify_findings(detectors: list, contracts: list, contract_root_dir: str, d
         
         console.print(f"\n[cyan][{idx}/{len(actionable)}] Analyzing {impact} severity finding: {check}[/cyan]")
         
-        # 1. Generate PoC
+        # Combine all contract code to send to LLM (simplified approach)
+        main_code = "\n".join([f"// File: {name}\n{content}" for name, content in contracts_dict.items()])
+        main_code = main_code[-8000:] # Basic length limit for LLM context
+        
+        # 1. Generate Initial PoC
         poc_code = None
         try:
-            with console.status("[dim]Generating Foundry exploit with AI...[/dim]"):
-                # Combine all contract code to send to LLM (simplified approach)
-                main_code = "\n".join([f"// File: {name}\n{content}" for name, content in contracts_dict.items()])
-                
+            with console.status("[dim]Generating initial Foundry exploit with AI...[/dim]"):
                 poc_code = ai_gen.generate_poc(
                     contract_name="Multiple Contracts",
-                    contract_content=main_code[-8000:], # Basic length limit for LLM context
+                    contract_content=main_code,
                     vulnerability_desc=desc
                 )
         except Exception as e:
@@ -642,36 +643,68 @@ def _verify_findings(detectors: list, contracts: list, contract_root_dir: str, d
             console.print("[yellow]Failed to generate PoC. Skipping.[/yellow]")
             continue
             
+        # Optional debug logging for first PoC
         if debug:
             syntax = Syntax(poc_code, "solidity", theme="monokai", line_numbers=True)
-            console.print(Panel(syntax, title="[bold cyan]LLM Generated PoC[/bold cyan]", border_style="cyan"))
+            console.print(Panel(syntax, title="[bold cyan]Initial LLM Generated PoC[/bold cyan]", border_style="cyan"))
             
-        # 2. Verify PoC
+        # 2. Agentic Verification Loop (Max 3 attempts)
+        max_attempts = 3
         is_real = False
-        verify_log = ""
-        try:
-            with console.status("[dim]Executing PoC in isolated Foundry environment...[/dim]"):
-                is_real, verify_log = verifier.verify(contracts_dict, poc_code, project_root=contract_root_dir)
-        except Exception as e:
-            err_console.print(f"[bold red]Error during PoC execution/verification:[/bold red] {e}")
-            continue
-            
-        if debug and verify_log:
-            console.print(Panel(Text.from_ansi(verify_log), title="[bold yellow]Foundry Execution Output[/bold yellow]", border_style="yellow"))
-            
-        if is_real:
-            console.print(f"✅ [bold green]VERIFIED TRUE POSITIVE![/bold green] Exploit succeeded.")
-            verified_true_positives.append(d)
-            
-            # Save the successful PoC
-            poc_filename = verified_dir / f"{check}_exploit_{idx}.t.sol"
+        final_log = ""
+        
+        for attempt in range(1, max_attempts + 1):
+            verify_log = ""
             try:
-                poc_filename.write_text(poc_code, encoding="utf-8")
-                console.print(f"[dim]Saved exploit to {poc_filename}[/dim]")
-            except Exception:
-                pass
-        else:
-            console.print(f"❌ [yellow]VERIFIED FALSE POSITIVE[/yellow] (Exploit failed) or Unexploitable.")
+                with console.status(f"[dim]Attempt {attempt}/{max_attempts}: Executing PoC in isolated environment...[/dim]"):
+                    is_real, verify_log = verifier.verify(contracts_dict, poc_code, project_root=contract_root_dir)
+                    final_log = verify_log
+            except Exception as e:
+                err_console.print(f"[bold red]Error during PoC execution:[/bold red] {e}")
+                final_log = str(e)
+                break # Hard failure, exit loop
+                
+            if debug and verify_log:
+                console.print(Panel(Text.from_ansi(verify_log), title=f"[bold yellow]Foundry Output (Attempt {attempt})[/bold yellow]", border_style="yellow"))
+                
+            if is_real:
+                # Success!
+                console.print(f"✅ [bold green]VERIFIED TRUE POSITIVE! (Failed in {attempt} attempt(s))[/bold green] Exploit succeeded.")
+                verified_true_positives.append(d)
+                
+                # Save the successful PoC
+                poc_filename = verified_dir / f"{check}_exploit_{idx}.t.sol"
+                try:
+                    poc_filename.write_text(poc_code, encoding="utf-8")
+                    console.print(f"[dim]Saved exploit to {poc_filename}[/dim]")
+                except Exception:
+                    pass
+                break
+                
+            # If not real, and we have attempts left, try to fix it
+            if attempt < max_attempts:
+                console.print(f"⚠️ [yellow]Execution returned False. Refining PoC (Attempt {attempt+1}...)[/yellow]")
+                try:
+                    with console.status(f"[dim]Refining PoC based on error logs...[/dim]"):
+                        poc_code = ai_gen.refine_poc(poc_code, verify_log, main_code)
+                except Exception as e:
+                    err_console.print(f"[bold red]Error during PoC refinement:[/bold red] {e}")
+                    break
+                    
+                if not poc_code:
+                    console.print("[red]AI failed to refine PoC. Stopping attempts.[/red]")
+                    break
+        
+        # 3. Triage Fallback if all attempts failed
+        if not is_real:
+            console.print(f"❌ [bold red]Exploit verification failed after {max_attempts} attempts.[/bold red]")
+            with console.status(f"[dim]Triaging finding as potential False Positive...[/dim]"):
+                triage_reason = ai_gen.triage_finding(main_code, desc, final_log)
+                
+            if triage_reason:
+                console.print(Panel(triage_reason, title="[bold magenta]AI Triage Verdict[/bold magenta]", border_style="magenta"))
+            else:
+                console.print("❌ [yellow]VERIFIED FALSE POSITIVE[/yellow] (Exploit failed) or Unexploitable.")
 
     # 3. Final Summary Table
     if verified_true_positives:

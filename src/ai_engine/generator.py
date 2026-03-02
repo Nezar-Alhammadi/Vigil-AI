@@ -142,6 +142,78 @@ CRITICAL RULES FOR PROVING THE EXPLOIT:
             print(f"[!] LLM Generation Error: {e}")
             return None
 
+    def refine_poc(self, original_poc: str, foundry_log: str, contract_content: str) -> Optional[str]:
+        """
+        Takes a failing PoC and the Foundry error log, and asks the LLM to fix it.
+        """
+        prompt = f"""You are an Expert Web3 Security Engineer.
+Your previously generated Foundry Proof of Concept (PoC) failed to execute or compile.
+Your task is to analyze the error log, fix the bug in the PoC, and output the corrected Solidity code.
+
+### Foundry Error Log:
+```text
+{foundry_log}
+```
+
+### Original Failing PoC:
+```solidity
+{original_poc}
+```
+
+### Target Smart Contract Source Code (For Reference):
+```solidity
+{contract_content}
+```
+
+### Instructions:
+1. Identify why the test failed (e.g., compilation error, syntax error, wrong import path, missing setup logic).
+2. Rewrite the entire `ExploitTest` contract with the correct fix.
+3. REMEMBER: Maintain all critical rules for proving the exploit (strict assertions like `assertGt`, `assertEq`, `vm.expectRevert()`).
+4. Output ONLY the raw Solidity code. No markdown formatting, no explanations, just the code itself.
+"""
+        try:
+            return self._call_llm(prompt)
+        except Exception as e:
+            print(f"[!] LLM Refinement Error: {e}")
+            return None
+
+    def triage_finding(self, contract_content: str, vulnerability_desc: str, foundry_log: str) -> Optional[str]:
+        """
+        Acts as a 'Judge' to determine why an exploit couldn't be proven after retries,
+        checking the code directly to see if the Slither finding was a False Positive.
+        """
+        prompt = f"""You are an Expert Web3 Security Auditor and AI Judge.
+A static analysis tool (Slither) reported a vulnerability, but our dynamic verification engine (Foundry) completely failed to generate a passing exploit after multiple attempts. 
+
+Your task is to review the Target Smart Contract and the failure context to confidently determine if this finding is a **False Positive** or just **Unexploitable/Too Complex** for simple automation.
+
+### Slither Vulnerability Description:
+{vulnerability_desc}
+
+### Last Foundry Execution Failure Log:
+```text
+{foundry_log[-2000:]} 
+```
+
+### Target Smart Contract Source Code:
+```solidity
+{contract_content}
+```
+
+### Instructions:
+1. Carefully analyze the contract's actual logic.
+2. Did Slither miss a modifier (e.g., `nonReentrant`, `onlyOwner`)? Did it misunderstand the state machine or math?
+3. Provide a very concise, 1-3 sentence logical justification of your final verdict. Start your response with either "[FALSE POSITIVE]" or "[UNEXPLOITABLE]".
+"""
+        try:
+            # We don't clean code formatting from the triage output since it's meant for human reading
+            resp = self._call_llm(prompt)
+            # Just in case the LLM wrapped it in markdown quotes
+            return resp.replace("```markdown", "").replace("```text", "").replace("```", "").strip()
+        except Exception as e:
+            print(f"[!] LLM Triage Error: {e}")
+            return None
+
     def _call_llm(self, prompt: str) -> str:
         if self.provider in ["openai", "openrouter"]:
             response = self.client.chat.completions.create(
