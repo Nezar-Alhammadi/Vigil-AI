@@ -32,6 +32,7 @@ class LocalLoader:
     def __init__(self, path: str, full: bool = False):
         self.root = Path(path).resolve()
         self.full = full
+        self.readme_content: str = ""
 
     def validate(self) -> Tuple[bool, str]:
         if not self.root.exists():
@@ -50,6 +51,17 @@ class LocalLoader:
             return [contract] if contract else []
 
         contracts: List[ContractFile] = []
+        
+        # Try to find a README for business logic context
+        for readme_name in ["README.md", "README.txt", "README", "readme.md", "Readme.md"]:
+            readme_path = self.root / readme_name
+            if readme_path.exists() and readme_path.is_file():
+                try:
+                    self.readme_content = readme_path.read_text(encoding="utf-8", errors="ignore")
+                    break
+                except OSError:
+                    pass
+        
         
         extra_ignored = set()
         if not self.full:

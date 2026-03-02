@@ -32,6 +32,7 @@ class GitHubLoader:
         base = self.original_url.split(".git")[0].rstrip("/")
         self._clone_url = base + ".git"
         self._temp_dir: str | None = None
+        self.readme_content: str = ""
 
     def validate(self) -> Tuple[bool, str]:
         if not _GITHUB_PATTERN.match(self.original_url):
@@ -49,6 +50,8 @@ class GitHubLoader:
 
             loader = LocalLoader(self._temp_dir, full=full)
             contracts = loader.load()
+            self.readme_content = loader.readme_content
+            
             
             resolved_temp = Path(self._temp_dir).resolve()
             

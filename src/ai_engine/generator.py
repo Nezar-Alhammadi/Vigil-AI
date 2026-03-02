@@ -123,6 +123,10 @@ CRITICAL RULES FOR PROVING THE EXPLOIT:
    - For DoS/Griefing: Use `vm.expectRevert()` to prove a legitimate user can no longer use the function.
    - For Logic Bugs/Bad PRNG: Assert that the attacker received the exact unintended benefit (e.g., `assertEq(contract.winner(), attacker)`).
 4. If your test does not include a mathematical proof of damage, you have failed.
+
+### Analytical Requirements:
+Before writing the exploit, carefully review the contract for any logical or technical barriers (e.g., specific state checks, role-based logic, or an intended feature) that might prevent the exploit from working in a production environment. Your PoC must bypass or account for these barriers.
+
 ### Target Smart Contract Source Code:
 ```solidity
 {contract_content}
@@ -212,6 +216,41 @@ Your task is to review the Target Smart Contract and the failure context to conf
             return resp.replace("```markdown", "").replace("```text", "").replace("```", "").strip()
         except Exception as e:
             print(f"[!] LLM Triage Error: {e}")
+            return None
+
+    def validate_finding(self, contract_content: str, readme_content: str, vulnerability_desc: str) -> Optional[str]:
+        """
+        Acts as a 'Security Judge' to perform Logical Pre-Verification before attempting to write a PoC.
+        """
+        prompt = f"""You are an Expert Web3 Security Judge.
+A static analysis tool (Slither) reported a vulnerability in the following smart contract. 
+Your task is to review the Slither finding against the contract code and the project's README (Business Logic Context).
+
+### Slither Vulnerability Description:
+{vulnerability_desc}
+
+### Project README (Business Logic Context):
+```text
+{readme_content}
+```
+
+### Target Smart Contract Source Code:
+```solidity
+{contract_content}
+```
+
+### Instructions:
+Determine if the reported issue is practically exploitable or if it's an intended feature/protected by access control (e.g., onlyOwner, specific state checks, or role-based logic).
+1. Analyze the contract logic deeply and cross-reference with the README.
+2. Check for any logical or technical barriers that mitigate the finding.
+3. If it's a false positive, return "[FALSE POSITIVE]" followed by a brief logical justification.
+4. If it's potentially valid and exploitable, return "[VALID]".
+Your response MUST start with either "[FALSE POSITIVE]" or "[VALID]".
+"""
+        try:
+            return self._call_llm(prompt)
+        except Exception as e:
+            print(f"[!] LLM Validation Error: {e}")
             return None
 
     def _call_llm(self, prompt: str) -> str:

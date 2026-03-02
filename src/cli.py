@@ -173,7 +173,7 @@ def _run_local_scan(path: str, full: bool, debug: bool) -> None:
     _print_contracts_table(contracts, source_label="Local Path")
     detectors = _run_slither(path, full)
     if detectors:
-        _verify_findings(detectors, contracts, path, debug)
+        _verify_findings(detectors, contracts, path, loader.readme_content, debug)
 
 
 def _run_github_scan(url: str, full: bool, debug: bool) -> None:
@@ -197,7 +197,7 @@ def _run_github_scan(url: str, full: bool, debug: bool) -> None:
         if repo_path:
             detectors = _run_slither(repo_path, full)
             if detectors:
-                _verify_findings(detectors, contracts, repo_path, debug)
+                _verify_findings(detectors, contracts, repo_path, loader.readme_content, debug)
     finally:
         loader.cleanup()
 
@@ -236,7 +236,7 @@ def _run_chain_scan(address: str, chain: str, api_key: str, full: bool, debug: b
     _print_contracts_table(contracts, source_label=f"On-Chain ({chain.capitalize()})")
     detectors, tmp_dir = _run_slither_for_chain_contracts(contracts, full)
     if detectors and tmp_dir:
-        _verify_findings(detectors, contracts, tmp_dir, debug)
+        _verify_findings(detectors, contracts, tmp_dir, "", debug)
 
 
 def _print_contracts_table(contracts: list, source_label: str) -> None:
@@ -593,7 +593,7 @@ def _looks_like_missing_foundry_deps(stderr: str) -> bool:
     return any(marker in stderr for marker in markers)
 
 
-def _verify_findings(detectors: list, contracts: list, contract_root_dir: str, debug: bool = False) -> None:
+def _verify_findings(detectors: list, contracts: list, contract_root_dir: str, readme_content: str = "", debug: bool = False) -> None:
     # Filter only actionable findings
     target_impacts = {"High", "Medium", "Low"}
     actionable = [d for d in detectors if d.get("impact", "Informational") in target_impacts]
@@ -625,6 +625,18 @@ def _verify_findings(detectors: list, contracts: list, contract_root_dir: str, d
         # Combine all contract code to send to LLM (simplified approach)
         main_code = "\n".join([f"// File: {name}\n{content}" for name, content in contracts_dict.items()])
         main_code = main_code[-8000:] # Basic length limit for LLM context
+        
+        # 0. Logical Pre-Verification Triage
+        with console.status("[dim]Evaluating finding via AI Security Judge (Pre-Verification)...[/dim]"):
+            validation_result = ai_gen.validate_finding(main_code, readme_content, desc)
+            
+        if validation_result and validation_result.startswith("[FALSE POSITIVE]"):
+            console.print(Panel(validation_result, title="[bold magenta]AI Security Judge: False Positive[/bold magenta]", border_style="magenta"))
+            continue
+        elif validation_result and validation_result.startswith("[VALID]"):
+            console.print("[dim]AI Security Judge: Finding deemed potentially valid. Proceeding to exploit generation...[/dim]")
+        elif validation_result:
+            console.print("[dim]AI Security Judge: Unable to confidently validate finding. Proceeding to exploit generation...[/dim]")
         
         # 1. Generate Initial PoC
         poc_code = None
