@@ -30,6 +30,7 @@ import typer
 from rich import box
 from rich.console import Console
 from rich.panel import Panel
+from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
@@ -103,6 +104,11 @@ def scan(
         "--full",
         help="Run a full scan including libraries and test folders (e.g. lib/, test/).",
     ),
+    debug: bool = typer.Option(
+        False,
+        "--debug",
+        help="Print LLM generated PoC and raw Foundry output directly to the terminal.",
+    ),
 ) -> None:
     """
     Scan a smart contract for security vulnerabilities.
@@ -113,7 +119,7 @@ def scan(
       --url      GitHub repository URL
       --address  Deployed on-chain contract address
     """
-    _run_scan(path, url, address, chain, api_key, full)
+    _run_scan(path, url, address, chain, api_key, full, debug)
 
 
 def _run_scan(
@@ -123,6 +129,7 @@ def _run_scan(
     chain: str,
     api_key: str,
     full: bool,
+    debug: bool,
 ) -> None:
     sources_given = sum(x is not None for x in [path, url, address])
 
@@ -144,14 +151,14 @@ def _run_scan(
         raise typer.Exit(code=1)
 
     if path is not None:
-        _run_local_scan(path, full)
+        _run_local_scan(path, full, debug)
     elif url is not None:
-        _run_github_scan(url, full)
+        _run_github_scan(url, full, debug)
     else:
-        _run_chain_scan(address, chain, api_key, full)  # type: ignore[arg-type]
+        _run_chain_scan(address, chain, api_key, full, debug)  # type: ignore[arg-type]
 
 
-def _run_local_scan(path: str, full: bool) -> None:
+def _run_local_scan(path: str, full: bool, debug: bool) -> None:
     console.print(Panel(f"[bold cyan]Input:[/bold cyan]  Local Path\n[bold cyan]Target:[/bold cyan] {path}", border_style="green", expand=False))
 
     loader = LocalLoader(path, full=full)
@@ -166,10 +173,10 @@ def _run_local_scan(path: str, full: bool) -> None:
     _print_contracts_table(contracts, source_label="Local Path")
     detectors = _run_slither(path, full)
     if detectors:
-        _verify_findings(detectors, contracts, path)
+        _verify_findings(detectors, contracts, path, debug)
 
 
-def _run_github_scan(url: str, full: bool) -> None:
+def _run_github_scan(url: str, full: bool, debug: bool) -> None:
     console.print(Panel(f"[bold cyan]Input:[/bold cyan]  GitHub URL\n[bold cyan]Target:[/bold cyan] {url}", border_style="blue", expand=False))
 
     loader = GitHubLoader(url)
@@ -190,12 +197,12 @@ def _run_github_scan(url: str, full: bool) -> None:
         if repo_path:
             detectors = _run_slither(repo_path, full)
             if detectors:
-                _verify_findings(detectors, contracts, repo_path)
+                _verify_findings(detectors, contracts, repo_path, debug)
     finally:
         loader.cleanup()
 
 
-def _run_chain_scan(address: str, chain: str, api_key: str, full: bool) -> None:
+def _run_chain_scan(address: str, chain: str, api_key: str, full: bool, debug: bool) -> None:
     cfg = SUPPORTED_CHAINS.get(chain.lower(), {})
     explorer = cfg.get("explorer_name", chain)
 
@@ -229,7 +236,7 @@ def _run_chain_scan(address: str, chain: str, api_key: str, full: bool) -> None:
     _print_contracts_table(contracts, source_label=f"On-Chain ({chain.capitalize()})")
     detectors, tmp_dir = _run_slither_for_chain_contracts(contracts, full)
     if detectors and tmp_dir:
-        _verify_findings(detectors, contracts, tmp_dir)
+        _verify_findings(detectors, contracts, tmp_dir, debug)
 
 
 def _print_contracts_table(contracts: list, source_label: str) -> None:
@@ -277,6 +284,7 @@ class ShellSession:
     chain: str = "ethereum"
     api_key: str = ""
     full: bool = False
+    debug: bool = False
 
 
 def _run_interactive_shell() -> None:
@@ -342,6 +350,7 @@ def _print_shell_help() -> None:
     table.add_row("set chain <value>", f"Set chain ({', '.join(SUPPORTED_CHAINS)})")
     table.add_row("set api_key <value>", "Set explorer API key")
     table.add_row("set full <true/false>", "Toggle Full Scan vs Focus Scan (ignore libs)")
+    table.add_row("set debug <true/false>", "Toggle Debug output")
     table.add_row("reset", "Clear all session values")
     table.add_row("scan", "Run scan using current session values")
     table.add_row("clear", "Clear terminal view")
@@ -361,6 +370,7 @@ def _print_shell_state(session: ShellSession) -> None:
     table.add_row("chain", session.chain)
     table.add_row("api_key", "***" if session.api_key else "[dim]-[/dim]")
     table.add_row("full scan", "[green]True[/green]" if session.full else "[yellow]False[/yellow]")
+    table.add_row("debug", "[green]True[/green]" if session.debug else "[yellow]False[/yellow]")
     console.print(table)
 
 
@@ -398,6 +408,8 @@ def _handle_shell_set(session: ShellSession, args: list[str]) -> None:
         session.api_key = value
     elif field == "full":
         session.full = value.lower() in {"true", "1", "yes", "y"}
+    elif field == "debug":
+        session.debug = value.lower() in {"true", "1", "yes", "y"}
     else:
         err_console.print(f"[bold red]Error:[/bold red] Unknown field '{field}'.")
         return
@@ -407,7 +419,7 @@ def _handle_shell_set(session: ShellSession, args: list[str]) -> None:
 
 def _run_shell_scan(session: ShellSession) -> None:
     try:
-        _run_scan(session.path, session.url, session.address, session.chain, session.api_key, session.full)
+        _run_scan(session.path, session.url, session.address, session.chain, session.api_key, session.full, session.debug)
     except typer.Exit:
         return
 
@@ -581,7 +593,7 @@ def _looks_like_missing_foundry_deps(stderr: str) -> bool:
     return any(marker in stderr for marker in markers)
 
 
-def _verify_findings(detectors: list, contracts: list, contract_root_dir: str) -> None:
+def _verify_findings(detectors: list, contracts: list, contract_root_dir: str, debug: bool = False) -> None:
     # Filter only actionable findings
     target_impacts = {"High", "Medium", "Low"}
     actionable = [d for d in detectors if d.get("impact", "Informational") in target_impacts]
@@ -611,23 +623,41 @@ def _verify_findings(detectors: list, contracts: list, contract_root_dir: str) -
         console.print(f"\n[cyan][{idx}/{len(actionable)}] Analyzing {impact} severity finding: {check}[/cyan]")
         
         # 1. Generate PoC
-        with console.status("[dim]Generating Foundry exploit with AI...[/dim]"):
-            # Combine all contract code to send to LLM (simplified approach)
-            main_code = "\n".join([f"// File: {name}\n{content}" for name, content in contracts_dict.items()])
-            
-            poc_code = ai_gen.generate_poc(
-                contract_name="Multiple Contracts",
-                contract_content=main_code[-8000:], # Basic length limit for LLM context
-                vulnerability_desc=desc
-            )
+        poc_code = None
+        try:
+            with console.status("[dim]Generating Foundry exploit with AI...[/dim]"):
+                # Combine all contract code to send to LLM (simplified approach)
+                main_code = "\n".join([f"// File: {name}\n{content}" for name, content in contracts_dict.items()])
+                
+                poc_code = ai_gen.generate_poc(
+                    contract_name="Multiple Contracts",
+                    contract_content=main_code[-8000:], # Basic length limit for LLM context
+                    vulnerability_desc=desc
+                )
+        except Exception as e:
+            err_console.print(f"[bold red]Error during PoC generation:[/bold red] {e}")
+            continue
             
         if not poc_code:
             console.print("[yellow]Failed to generate PoC. Skipping.[/yellow]")
             continue
             
+        if debug:
+            syntax = Syntax(poc_code, "solidity", theme="monokai", line_numbers=True)
+            console.print(Panel(syntax, title="[bold cyan]LLM Generated PoC[/bold cyan]", border_style="cyan"))
+            
         # 2. Verify PoC
-        with console.status("[dim]Executing PoC in isolated Foundry environment...[/dim]"):
-            is_real, verify_log = verifier.verify(contracts_dict, poc_code)
+        is_real = False
+        verify_log = ""
+        try:
+            with console.status("[dim]Executing PoC in isolated Foundry environment...[/dim]"):
+                is_real, verify_log = verifier.verify(contracts_dict, poc_code)
+        except Exception as e:
+            err_console.print(f"[bold red]Error during PoC execution/verification:[/bold red] {e}")
+            continue
+            
+        if debug and verify_log:
+            console.print(Panel(Text.from_ansi(verify_log), title="[bold yellow]Foundry Execution Output[/bold yellow]", border_style="yellow"))
             
         if is_real:
             console.print(f"✅ [bold green]VERIFIED TRUE POSITIVE![/bold green] Exploit succeeded.")
