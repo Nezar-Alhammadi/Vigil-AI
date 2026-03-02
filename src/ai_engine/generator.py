@@ -16,7 +16,7 @@ class PoCGenerator:
     def _load_config(self):
         try:
             with open(self.config_path, "r", encoding="utf-8") as f:
-                self.config = yaml.safe_load(f)
+                self.config = yaml.safe_load(f) or {}
         except Exception as e:
             self.config = {}
 
@@ -36,6 +36,32 @@ class PoCGenerator:
                 self.api_key = os.getenv("ANTHROPIC_API_KEY", "")
             elif self.provider == "google":
                 self.api_key = os.getenv("GEMINI_API_KEY", "")
+
+        # If API key is still missing, interactively prompt the user
+        if not self.api_key:
+            import typer
+            from rich.console import Console
+            console = Console()
+            
+            console.print(f"\n[bold yellow]No API Key found for provider '{self.provider}'.[/bold yellow]")
+            self.api_key = typer.prompt(f"Please enter your {self.provider.capitalize()} API Key", hide_input=True).strip()
+            self.model = typer.prompt("Please enter the model you want to use", default=self.model).strip()
+            
+            # Update config dictionary
+            if "llm" not in self.config:
+                self.config["llm"] = {}
+                
+            self.config["llm"]["provider"] = self.provider
+            self.config["llm"]["api_key"] = self.api_key
+            self.config["llm"]["model"] = self.model
+            
+            # Save persistently to config.yaml
+            try:
+                with open(self.config_path, "w", encoding="utf-8") as f:
+                    yaml.safe_dump(self.config, f, default_flow_style=False, sort_keys=False)
+                console.print(f"[bold green]Successfully saved credentials to {self.config_path}.[/bold green]\n")
+            except Exception as e:
+                console.print(f"[bold red]Failed to save to {self.config_path}: {e}[/bold red]\n")
 
     def _init_client(self):
         if not self.api_key:
