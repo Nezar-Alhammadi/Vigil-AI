@@ -30,6 +30,8 @@ class PoCGenerator:
         if not self.api_key:
             if self.provider == "openai":
                 self.api_key = os.getenv("OPENAI_API_KEY", "")
+            elif self.provider == "openrouter":
+                self.api_key = os.getenv("OPENROUTER_API_KEY", "")
             elif self.provider == "anthropic":
                 self.api_key = os.getenv("ANTHROPIC_API_KEY", "")
             elif self.provider == "google":
@@ -42,6 +44,12 @@ class PoCGenerator:
         if self.provider == "openai":
             import openai
             self.client = openai.OpenAI(api_key=self.api_key)
+        elif self.provider == "openrouter":
+            import openai
+            self.client = openai.OpenAI(
+                base_url="https://openrouter.ai/api/v1",
+                api_key=self.api_key
+            )
         elif self.provider == "anthropic":
             import anthropic
             self.client = anthropic.Anthropic(api_key=self.api_key)
@@ -91,7 +99,7 @@ Actually, standard convention: The test should contain a `testExploit()` functio
             return None
 
     def _call_llm(self, prompt: str) -> str:
-        if self.provider == "openai":
+        if self.provider in ["openai", "openrouter"]:
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],

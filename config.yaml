@@ -1,7 +1,7 @@
 llm:
-  provider: "openai"       # openai | anthropic | google
-  model: "gpt-4-turbo"
-  api_key: ""              # Set via env: OPENAI_API_KEY
+  provider: "openrouter"   # openrouter | openai | anthropic | google
+  model: "anthropic/claude-3.5-sonnet"
+  api_key: ""              # Set via env: OPENROUTER_API_KEY (or OPENAI_API_KEY for openai)
   temperature: 0.2
 
 
