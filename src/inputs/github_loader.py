@@ -81,7 +81,7 @@ class GitHubLoader:
             ],
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=600,
         )
         if result.returncode != 0:
             raise RuntimeError(
@@ -113,19 +113,19 @@ class GitHubLoader:
             ["git", "submodule", "update", "--init", "--recursive"],
             cwd=self._temp_dir,
             capture_output=True,
-            timeout=60
+            timeout=300
         )
 
         # 2. تشغيل Makefile إذا وجد
         if (root / "Makefile").exists():
-            subprocess.run(["make"], cwd=self._temp_dir, capture_output=True, timeout=120)
+            subprocess.run(["make"], cwd=self._temp_dir, capture_output=True, timeout=600)
 
         # 3. تثبيت مكتبات Node.js إذا لزم الأمر
         if (root / "package.json").exists():
             if shutil.which("yarn"):
-                subprocess.run(["yarn", "install"], cwd=self._temp_dir, capture_output=True, timeout=120)
+                subprocess.run(["yarn", "install"], cwd=self._temp_dir, capture_output=True, timeout=600)
             elif shutil.which("npm"):
-                subprocess.run(["npm", "install", "--legacy-peer-deps"], cwd=self._temp_dir, capture_output=True, timeout=120)
+                subprocess.run(["npm", "install", "--legacy-peer-deps"], cwd=self._temp_dir, capture_output=True, timeout=600)
 
         # 4. المُحلل الذكي للاعتماديات (Smart Dependency Resolver) - واعي بالإصدارات!
         needed_libs = set()
@@ -181,7 +181,7 @@ class GitHubLoader:
                     subprocess.run(
                         ["git", "clone", "--depth", "1", "--branch", branch, repo_url, str(target_path)], 
                         capture_output=True, 
-                        timeout=120
+                        timeout=600
                     )
 
         # 5. تهيئة وبناء Foundry
@@ -192,7 +192,7 @@ class GitHubLoader:
                     [forge_bin, "build"], 
                     cwd=self._temp_dir, 
                     capture_output=True, 
-                    timeout=120
+                    timeout=600
                 )
 
         # 6. تهيئة مشاريع Hardhat (إن وجدت)
@@ -203,5 +203,5 @@ class GitHubLoader:
                     [npx_bin, "hardhat", "compile"], 
                     cwd=self._temp_dir, 
                     capture_output=True, 
-                    timeout=120
+                    timeout=600
                 )
