@@ -29,8 +29,9 @@ class ContractFile:
 class LocalLoader:
     """Loads smart contracts from a local file system path."""
 
-    def __init__(self, path: str):
+    def __init__(self, path: str, full: bool = False):
         self.root = Path(path).resolve()
+        self.full = full
 
     def validate(self) -> Tuple[bool, str]:
         if not self.root.exists():
@@ -49,9 +50,17 @@ class LocalLoader:
             return [contract] if contract else []
 
         contracts: List[ContractFile] = []
+        
+        extra_ignored = set()
+        if not self.full:
+            extra_ignored = {"test", "tests", "script", "scripts", "mock", "mocks"}
+            
         for dirpath, dirnames, filenames in os.walk(self.root):
             # Skip ignored directories in-place so os.walk doesn't descend into them
-            dirnames[:] = [d for d in dirnames if d not in IGNORED_DIRS]
+            dirnames[:] = [
+                d for d in dirnames 
+                if d not in IGNORED_DIRS and d.lower() not in extra_ignored
+            ]
             for filename in filenames:
                 file_path = Path(dirpath) / filename
                 contract = self._read_file(file_path)

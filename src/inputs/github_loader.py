@@ -41,13 +41,13 @@ class GitHubLoader:
             )
         return True, ""
 
-    def load(self) -> List[ContractFile]:
+    def load(self, full: bool = False) -> List[ContractFile]:
         self._temp_dir = tempfile.mkdtemp(prefix="vigil_github_")
         try:
             self._clone()
             self._install_dependencies()
 
-            loader = LocalLoader(self._temp_dir)
+            loader = LocalLoader(self._temp_dir, full=full)
             contracts = loader.load()
             
             resolved_temp = Path(self._temp_dir).resolve()

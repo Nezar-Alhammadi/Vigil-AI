@@ -152,7 +152,7 @@ def _run_scan(
 def _run_local_scan(path: str, full: bool) -> None:
     console.print(Panel(f"[bold cyan]Input:[/bold cyan]  Local Path\n[bold cyan]Target:[/bold cyan] {path}", border_style="green", expand=False))
 
-    loader = LocalLoader(path)
+    loader = LocalLoader(path, full=full)
     ok, msg = loader.validate()
     if not ok:
         err_console.print(f"[bold red]Error:[/bold red] {msg}")
@@ -176,7 +176,7 @@ def _run_github_scan(url: str, full: bool) -> None:
 
     try:
         with console.status("[bold green]Cloning repository & installing dependencies..."):
-            contracts = loader.load()
+            contracts = loader.load(full=full)
             repo_path = loader.repo_path
     except RuntimeError as exc:
         err_console.print(f"[bold red]Error:[/bold red] {exc}")
