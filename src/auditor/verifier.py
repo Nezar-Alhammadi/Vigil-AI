@@ -76,9 +76,13 @@ class DynamicVerifier:
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_text(content, encoding="utf-8")
 
-        # Write the LLM-generated exploit into test/
+        # Clean the test/ directory to ensure we only compile our PoC and not broken legacy tests
         forge_test = Path(self._temp_dir) / "test"
-        forge_test.mkdir(exist_ok=True)
+        if forge_test.exists():
+            shutil.rmtree(forge_test, ignore_errors=True)
+        forge_test.mkdir(parents=True, exist_ok=True)
+
+        # Write the LLM-generated exploit into test/
         poc_dest = forge_test / "Exploit.t.sol"
         poc_dest.write_text(poc_content, encoding="utf-8")
 

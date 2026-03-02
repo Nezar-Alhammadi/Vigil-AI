@@ -105,8 +105,14 @@ Your task is to write a standalone Foundry test (`Exploit.t.sol`) that successfu
 If the vulnerability is real, your Foundry test MUST FAIL or REVERT during the exploit execution, or it should include assertions that prove the exploit was successful (which we will interpret as a successful verification). 
 Actually, standard convention: The test should contain a `testExploit()` function. If the vulnerability is real, the exploit should succeed, and `testExploit()` should PASS. If the vulnerability doesn't exist (false positive), `testExploit()` should FAIL/REVERT.
 
-CRITICAL: You MUST use the EXACT SAME `pragma solidity` version as the provided target smart contract. Do not default to ^0.8.x if the contract is older. If the contract is <0.8.0, remember to import SafeMath if needed, but your primary goal is to make the test compile alongside the target.
-
+CRITICAL RULES FOR FOUNDRY TESTS:
+1. ALWAYS write your test using `pragma solidity ^0.8.20;` so it is compatible with modern `forge-std`.
+2. If the target smart contract is written in a version `< 0.8.0` (like 0.7.6), DO NOT directly import its `.sol` file into your test. This will cause a compiler version conflict.
+3. Instead, define an `interface` inside your test file containing the functions you need.
+4. To deploy the legacy contract, use Foundry's deployCode cheatcode: 
+   `address targetAddr = deployCode("FileName.sol:ContractName", abi.encode(constructorArg1));`
+   `targetContract = ITargetContract(targetAddr);`
+5. If the target contract is `>= 0.8.0`, you may import and deploy it normally.
 ### Target Smart Contract Source Code:
 ```solidity
 {contract_content}
