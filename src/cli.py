@@ -624,7 +624,10 @@ def _verify_findings(detectors: list, contracts: list, contract_root_dir: str, r
         
         # Combine all contract code to send to LLM (simplified approach)
         main_code = "\n".join([f"// File: {name}\n{content}" for name, content in contracts_dict.items()])
-        main_code = main_code[-8000:] # Basic length limit for LLM context
+        MAX_CHARS = 32000
+        if len(main_code) > MAX_CHARS:
+            half = MAX_CHARS // 2
+            main_code = main_code[:half] + "\n\n// ... [middle truncated for context] ...\n\n" + main_code[-half:]
         
         # 0. Logical Pre-Verification Triage
         with console.status("[dim]Evaluating finding via AI Security Judge (Pre-Verification)...[/dim]"):

@@ -220,32 +220,60 @@ Your task is to review the Target Smart Contract and the failure context to conf
 
     def validate_finding(self, contract_content: str, readme_content: str, vulnerability_desc: str) -> Optional[str]:
         """
-        Acts as a 'Security Judge' to perform Logical Pre-Verification before attempting to write a PoC.
+        Acts as a strict Security Judge using a structured 4-question chain
+        to accurately classify Slither findings as VALID or FALSE POSITIVE.
         """
-        prompt = f"""You are an Expert Web3 Security Judge.
-A static analysis tool (Slither) reported a vulnerability in the following smart contract. 
-Your task is to review the Slither finding against the contract code and the project's README (Business Logic Context).
+        prompt = f"""You are a strict Web3 Security Judge reviewing a Slither static analysis finding.
 
-### Slither Vulnerability Description:
+Your job is to answer FOUR questions in order. Do not skip any question.
+
+---
+
+### Slither Finding:
 {vulnerability_desc}
 
-### Project README (Business Logic Context):
-```text
-{readme_content}
-```
-
-### Target Smart Contract Source Code:
+### Smart Contract Source Code (COMPLETE):
 ```solidity
 {contract_content}
 ```
 
-### Instructions:
-Determine if the reported issue is practically exploitable or if it's an intended feature/protected by access control (e.g., onlyOwner, specific state checks, or role-based logic).
-1. Analyze the contract logic deeply and cross-reference with the README.
-2. Check for any logical or technical barriers that mitigate the finding.
-3. If it's a false positive, return "[FALSE POSITIVE]" followed by a brief logical justification.
-4. If it's potentially valid and exploitable, return "[VALID]".
-Your response MUST start with either "[FALSE POSITIVE]" or "[VALID]".
+### Project README (Business Context):
+```text
+{readme_content}
+```
+
+YOUR ANALYSIS PROCESS (answer each question explicitly):
+Q1 — What is the exact damage Slither describes?
+State the specific harm in one sentence (e.g., "funds can be drained", "function can be permanently blocked", "transfer can silently fail and funds are lost").
+
+Q2 — Who controls the inputs that lead to this damage?
+Look at the exact function signature, its modifiers, and all require/if checks at the entry point.
+- If ANY unprivileged user (attacker, random EOA, any caller) can reach the vulnerable code path → answer "UNPRIVILEGED" and mark [VALID] immediately, stop here.
+- If only a privileged role (onlyOwner, onlyCollector, specific role) can trigger it → answer "PRIVILEGED" and proceed to Q3.
+
+Q3 — Is the access control itself sound?
+Read the guard logic carefully in the actual code:
+- Wrong comparison operator? (== instead of >=, > instead of >=) → mark [VALID].
+- Missing check that should exist? → mark [VALID].
+- Condition that can be bypassed or manipulated by an external actor? → mark [VALID].
+- Guard is correctly implemented, covers all edge cases, and cannot be bypassed → proceed to Q4.
+
+Q4 — Does any realistic scenario break through the guard?
+Think concretely about: frontrunning, reentrancy, state manipulation before the call, indirect calls, griefing by a third party.
+- If yes → [VALID].
+- If no realistic path exists for an unprivileged actor → [FALSE POSITIVE].
+
+OUTPUT FORMAT:
+Write your answers to Q1, Q2, Q3, Q4 explicitly, then finish with exactly one of:
+[VALID]
+[FALSE POSITIVE] <one sentence reason>
+
+CRITICAL RULES:
+- "It was intended behavior" is NEVER a reason for FALSE POSITIVE.
+- "Protected by access control" alone is NOT enough — the control itself must be sound (Q3).
+- When uncertain → output [VALID]. Missing a real bug is worse than a false positive.
+- Do NOT invent exploits. Only mark VALID if the code AS WRITTEN creates the risk.
+- Read the COMPLETE contract code provided. Do not assume anything not written in the code.
 """
         try:
             return self._call_llm(prompt)
