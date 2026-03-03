@@ -7,6 +7,7 @@ then cleans up automatically.
 
 from __future__ import annotations
 
+import hashlib
 import re
 import shutil
 import subprocess
@@ -43,10 +44,21 @@ class GitHubLoader:
         return True, ""
 
     def load(self, full: bool = False) -> List[ContractFile]:
-        self._temp_dir = tempfile.mkdtemp(prefix="vigil_github_")
+        url_hash = hashlib.md5(self._clone_url.encode("utf-8")).hexdigest()
+        cache_dir = Path.home() / ".vigil_cache" / "github_repos"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        self._temp_dir = str(cache_dir / url_hash)
+
         try:
-            self._clone()
-            self._install_dependencies()
+            repo_path = Path(self._temp_dir)
+            is_cached = repo_path.exists() and (repo_path / ".git").exists()
+
+            if not is_cached:
+                # If path exists but isn't a valid git repo, clean it up first
+                if repo_path.exists():
+                    shutil.rmtree(repo_path, ignore_errors=True)
+                self._clone()
+                self._install_dependencies()
 
             loader = LocalLoader(self._temp_dir, full=full)
             contracts = loader.load()
@@ -65,9 +77,9 @@ class GitHubLoader:
             raise
 
     def cleanup(self) -> None:
-        if self._temp_dir and Path(self._temp_dir).exists():
-            shutil.rmtree(self._temp_dir, ignore_errors=True)
-            self._temp_dir = None
+        # Since we are caching the repositories, we no longer delete the directory.
+        # We just clear the reference.
+        self._temp_dir = None
 
     @property
     def repo_path(self) -> str | None:
